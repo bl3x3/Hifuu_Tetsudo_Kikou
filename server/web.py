@@ -1,4 +1,5 @@
 """Small LAN server: server-authoritative state, private projections and snapshots."""
+
 import argparse
 import copy
 import io
@@ -22,6 +23,7 @@ try:
 except ImportError:
     qrcode = None
 
+
 def now_ms():
     return time.monotonic_ns() // 1_000_000
 
@@ -41,19 +43,27 @@ class Store:
         for path in directory.glob('room-*.json'):
             try:
                 room = json.loads(path.read_text(encoding='utf-8'))
-                room.pop('matchRemaining', None)  # Retire the previous real-time limit in old snapshots.
+                room.pop(
+                    'matchRemaining', None
+                )  # Retire the previous real-time limit in old snapshots.
                 room.setdefault('requests', [])
                 for i, player in enumerate(room['players']):
-                    player.setdefault('seat', i+1)
+                    player.setdefault('seat', i + 1)
                     player.setdefault('requestUsed', False)
                 if room['phase'] not in ('lobby', 'ended'):
                     game.end(room, 'aborted', '主机服务已重启，本局安全中止。请由主持人重新开局。')
                     if room.get('journal'):
-                        room['journal'].update(timeQuality='interrupted', endedAt=None,
-                                               restartDetectedAt=journal.wall_now())
-                        room['events'][-1].update(at=None, elapsedMs=None,
+                        room['journal'].update(
+                            timeQuality='interrupted',
+                            endedAt=None,
+                            restartDetectedAt=journal.wall_now(),
+                        )
+                        room['events'][-1].update(
+                            at=None,
+                            elapsedMs=None,
                             observedElapsedMs=room['journal']['elapsedMs'],
-                            detectedAt=room['journal']['restartDetectedAt'])
+                            detectedAt=room['journal']['restartDetectedAt'],
+                        )
                 room['updated'], room['hostSeen'] = now_ms(), 0
                 for p in room['players']:
                     p['seen'] = 0
@@ -85,7 +95,9 @@ class Store:
         if room['phase'] != 'ended':
             return
         clock = room.get('journal') or {}
-        stamp = (clock.get('startedAt') or clock.get('createdAt') or 'unknown-time')[:19].replace(':','-')
+        stamp = (clock.get('startedAt') or clock.get('createdAt') or 'unknown-time')[:19].replace(
+            ':', '-'
+        )
         code = ''.join(c for c in room['code'] if c.isalnum())
         target = self.directory / 'logs' / f"{stamp}_{code}_{journal.round_id(room)}.json"
         if not target.exists():
@@ -107,7 +119,7 @@ class Store:
 
     def loop(self):
         last_save = 0
-        while not self.stopped.wait(.1):
+        while not self.stopped.wait(0.1):
             with self.lock:
                 now = now_ms()
                 for room in self.rooms.values():
@@ -118,7 +130,11 @@ class Store:
                             self.save(room)
                         except SaveError as error:
                             if room['phase'] in ('briefing', 'running', 'decision'):
-                                game.end(room, 'aborted', '无法保存房间状态，本局已中止。请检查主机磁盘。')
+                                game.end(
+                                    room,
+                                    'aborted',
+                                    '无法保存房间状态，本局已中止。请检查主机磁盘。',
+                                )
                             print(f'保存失败：{error}')
                 if now - last_save >= 1000:
                     last_save = now
@@ -136,17 +152,29 @@ def addresses(port):
     except OSError:
         pass
     try:
-        ips.update(item[4][0] for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET))
+        ips.update(
+            item[4][0] for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+        )
     except OSError:
         pass
-    return [f'http://{ip}:{port}' for ip in sorted(ips, key=lambda ip: (ip.startswith('127.'), ip != preferred, ip)) if not ip.startswith('169.254.')]
+    return [
+        f'http://{ip}:{port}'
+        for ip in sorted(ips, key=lambda ip: (ip.startswith('127.'), ip != preferred, ip))
+        if not ip.startswith('169.254.')
+    ]
 
 
 def public_url(value):
     parsed = urlsplit(value)
-    if (parsed.scheme not in ('http', 'https') or not parsed.hostname
-            or parsed.username is not None or parsed.password is not None
-            or parsed.path not in ('', '/') or parsed.query or parsed.fragment):
+    if (
+        parsed.scheme not in ('http', 'https')
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ('', '/')
+        or parsed.query
+        or parsed.fragment
+    ):
         raise argparse.ArgumentTypeError('公网地址必须是 http://域名:端口 或 https://域名。')
     try:
         parsed.port
@@ -156,21 +184,32 @@ def public_url(value):
 
 
 def configured_public_url(path):
+    """An absent local config means LAN-only; reject typos instead of hiding them."""
     if not path.exists():
         return None
-    value = json.loads(path.read_text(encoding='utf-8')).get('publicUrl')
-    return public_url(value) if value else None
+    config = json.loads(path.read_text(encoding='utf-8-sig'))
+    if not isinstance(config, dict) or set(config) != {'publicUrl'}:
+        raise ValueError(f'{path.name}: expected an object with only publicUrl')
+    value = config['publicUrl']
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f'{path.name}: publicUrl must be a URL string or null')
+    return public_url(value)
 
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+
     def __init__(self, host, port, directory, public_address=None):
         super().__init__((host, port), Handler)
         self.store = Store(directory)
         self.addresses = addresses(self.server_port)
         self.public_address = public_address
         if public_address:
-            self.addresses = [public_address] + [address for address in self.addresses if address != public_address]
+            self.addresses = [public_address] + [
+                address for address in self.addresses if address != public_address
+            ]
         self.map_svg = live_map().encode('utf-8')
 
 
@@ -188,7 +227,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'no-referrer')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+        self.send_header(
+            'Content-Security-Policy',
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+        )
         self.end_headers()
         self.wfile.write(body)
 
@@ -235,7 +277,9 @@ class Handler(BaseHTTPRequestHandler):
                 body = {}
             if parsed.path.startswith('/api/'):
                 with self.server.store.lock:
-                    room = self.server.store.rooms.get(str(body.get('room') or query.get('room') or '').upper())
+                    room = self.server.store.rooms.get(
+                        str(body.get('room') or query.get('room') or '').upper()
+                    )
                     before = copy.deepcopy(room) if post and room else None
                     try:
                         self.api(parsed.path, query, body, post)
@@ -263,8 +307,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def api(self, path, query, body, post):
         store, now = self.server.store, now_ms()
-        routes = {'/api/rooms': True, '/api/join': True, '/api/player': True, '/api/host': True,
-                  '/api/config': False, '/api/state': False, '/api/qr': False, '/api/export': False}
+        routes = {
+            '/api/rooms': True,
+            '/api/join': True,
+            '/api/player': True,
+            '/api/host': True,
+            '/api/config': False,
+            '/api/state': False,
+            '/api/qr': False,
+            '/api/export': False,
+        }
         if path not in routes:
             self.send(404, {'error': '没有此接口。'})
             return
@@ -272,10 +324,23 @@ class Handler(BaseHTTPRequestHandler):
             self.send(405, {'error': '请求方式不正确。'})
             return
         if path == '/api/config' and not post:
-            self.send(200, dict(stations=STATIONS, edges=EDGES, positions=POSITIONS, templates=TEMPLATES, lines=LINES,
-                                dialogueMap=dict(startTick=game.DIALOGUE_START_TICK, locations=public_map_locations()),
-                                addresses=self.server.addresses, publicAddress=self.server.public_address,
-                                qrAvailable=qrcode is not None, version='0.1.0'))
+            self.send(
+                200,
+                dict(
+                    stations=STATIONS,
+                    edges=EDGES,
+                    positions=POSITIONS,
+                    templates=TEMPLATES,
+                    lines=LINES,
+                    dialogueMap=dict(
+                        startTick=game.DIALOGUE_START_TICK, locations=public_map_locations()
+                    ),
+                    addresses=self.server.addresses,
+                    publicAddress=self.server.public_address,
+                    qrAvailable=qrcode is not None,
+                    version='0.1.0',
+                ),
+            )
             return
         if path == '/api/rooms' and post:
             if self.client_address[0] not in ('127.0.0.1', '::1'):
@@ -291,7 +356,10 @@ class Handler(BaseHTTPRequestHandler):
                 if previous['phase'] != 'ended':
                     raise ValueError('请先结束当前房间，再开启新房间。')
                 store.archive(previous)
-                if any(candidate.get('previousRoom') == previous['code'] for candidate in store.rooms.values()):
+                if any(
+                    candidate.get('previousRoom') == previous['code']
+                    for candidate in store.rooms.values()
+                ):
                     raise ValueError('此房间已经开启后续房间，请刷新主持端。')
             active = [r for r in store.rooms.values() if r['phase'] != 'ended']
             if len(active) >= 12:
@@ -313,7 +381,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         credential = self.headers.get('Authorization', '').removeprefix('Bearer ')
         host = secrets.compare_digest(credential, room['hostToken'])
-        player = next((p for p in room['players'] if secrets.compare_digest(credential, p['token'])), None)
+        player = next(
+            (p for p in room['players'] if secrets.compare_digest(credential, p['token'])), None
+        )
         phase = room['phase']
         game.advance(room, now)
         if phase != 'ended' and room['phase'] == 'ended':
@@ -326,16 +396,33 @@ class Handler(BaseHTTPRequestHandler):
                 room['hostSeen'] = now
             if player:
                 player['seen'] = now
-            state = game.private_state(room, player, now) if player else game.public_state(room, now)
-            state['nextRoom'] = next((candidate['code'] for candidate in store.rooms.values()
-                                      if candidate.get('previousRoom') == room['code']), None)
+            state = (
+                game.private_state(room, player, now) if player else game.public_state(room, now)
+            )
+            state['nextRoom'] = next(
+                (
+                    candidate['code']
+                    for candidate in store.rooms.values()
+                    if candidate.get('previousRoom') == room['code']
+                ),
+                None,
+            )
             self.send(200, state)
             return
         if path == '/api/join' and post:
             player = game.join(room, body.get('name'), now)
-            joined_address = next((address for address in self.server.addresses
-                                   if urlsplit(address).netloc == self.headers.get('Host')), None)
-            if self.client_address[0] not in ('127.0.0.1', '::1') and joined_address in self.server.addresses:
+            joined_address = next(
+                (
+                    address
+                    for address in self.server.addresses
+                    if urlsplit(address).netloc == self.headers.get('Host')
+                ),
+                None,
+            )
+            if (
+                self.client_address[0] not in ('127.0.0.1', '::1')
+                and joined_address in self.server.addresses
+            ):
                 room['joinAddress'] = joined_address
             store.save(room)
             self.send(200, dict(token=player['token'], id=player['id'], code=room['code']))
@@ -347,7 +434,11 @@ class Handler(BaseHTTPRequestHandler):
             if address not in self.server.addresses:
                 raise ValueError('请选择已配置的加入地址。')
             output = io.BytesIO()
-            qrcode.make(f"{address}/join?room={room['code']}", image_factory=qrcode.image.svg.SvgPathImage, border=3).save(output)
+            qrcode.make(
+                f"{address}/join?room={room['code']}",
+                image_factory=qrcode.image.svg.SvgPathImage,
+                border=3,
+            ).save(output)
             self.send(200, output.getvalue(), 'image/svg+xml')
             return
         if path == '/api/player' and post and player:
@@ -391,8 +482,19 @@ class Handler(BaseHTTPRequestHandler):
                 fresh['hostToken'] = room['hostToken']
                 fresh['joinAddress'] = room.get('joinAddress')
                 fresh['dialogueEnabled'] = room.get('dialogueEnabled', False)
-                fresh['players'] = [dict(id=p['id'], seat=p['seat'], token=p['token'], name=p['name'], seen=p['seen'],
-                    ready=False, messages=[], lastSeq=p['lastSeq']) for p in room['players']]
+                fresh['players'] = [
+                    dict(
+                        id=p['id'],
+                        seat=p['seat'],
+                        token=p['token'],
+                        name=p['name'],
+                        seen=p['seen'],
+                        ready=False,
+                        messages=[],
+                        lastSeq=p['lastSeq'],
+                    )
+                    for p in room['players']
+                ]
                 room.clear()
                 room.update(fresh)
             else:
@@ -419,17 +521,36 @@ class Handler(BaseHTTPRequestHandler):
         if not target.is_relative_to((ROOT / 'public').resolve()) or not target.is_file():
             self.send(404, {'error': '没有此文件。'})
             return
-        self.send(200, target.read_bytes(), mimetypes.guess_type(target.name)[0] or 'application/octet-stream')
+        self.send(
+            200,
+            target.read_bytes(),
+            mimetypes.guess_type(target.name)[0] or 'application/octet-stream',
+        )
 
 
 def main():
     parser = argparse.ArgumentParser(description='秘封铁道纪行 · Python 局域网服务')
     parser.add_argument('--port', type=int, default=8000)
     parser.add_argument('--bind', default='0.0.0.0')
-    parser.add_argument('--public-url', type=public_url, default=configured_public_url(ROOT / 'server-config.json'),
-                        help='公网玩家访问地址，覆盖 server-config.json 中的 publicUrl，优先用于加入链接和二维码')
+    parser.add_argument(
+        '--public-url',
+        type=public_url,
+        default=argparse.SUPPRESS,
+        help='公网玩家访问地址，覆盖 server-config.json 中的 publicUrl，优先用于加入链接和二维码',
+    )
+    parser.add_argument(
+        '--config',
+        type=Path,
+        default=ROOT / 'server-config.json',
+        help='本机部署配置文件（默认 server-config.json，不应提交到 Git）',
+    )
     parser.add_argument('--data-dir', type=Path, default=ROOT / 'runtime')
     args = parser.parse_args()
+    if not hasattr(args, 'public_url'):
+        try:
+            args.public_url = configured_public_url(args.config)
+        except (OSError, ValueError, argparse.ArgumentTypeError) as error:
+            parser.error(str(error))
     server = Server(args.bind, args.port, args.data_dir, args.public_url)
     worker = threading.Thread(target=server.store.loop, daemon=True)
     worker.start()

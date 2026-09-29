@@ -1,0 +1,184 @@
+{
+  "m_kyoto": {
+    "role": "maribel",
+    "group": "kyoto",
+    "stations": [
+      "s060"
+    ],
+    "text": "你为什么会有冥界的照片呀？",
+    "source": "《莲台野夜行》第4曲：古老的冥界寺",
+    "url": "https://thbwiki.cc/莲台野夜行/附带故事",
+    "mapping": "京都区域对应莲台野探访，不代表京都站就是故事现场。"
+  },
+  "m_nagano": {
+    "role": "maribel",
+    "group": "nagano",
+    "stations": [
+      "s039"
+    ],
+    "text": "似乎连多余的东西都看见了。",
+    "source": "《伊奘诺物质》第3曲：Heartfelt Fancy（节译）",
+    "url": "https://thbwiki.cc/伊奘诺物质/附带故事",
+    "mapping": "长野对应善光寺游览时的异常视觉。"
+  },
+  "m_nara": {
+    "role": "maribel",
+    "group": "nara",
+    "stations": [
+      "s063"
+    ],
+    "text": "咦？我满心以为这里只有鬼怪来着……",
+    "source": "《灵长新益京》第2曲：奈良异界公园",
+    "url": "https://thbwiki.cc/灵长新益京/附带故事",
+    "mapping": "奈良区域对应奈良异界公园。"
+  },
+  "m_express": {
+    "role": "maribel",
+    "group": "express",
+    "stations": [
+      "s023",
+      "s060"
+    ],
+    "edge": "e131",
+    "text": "而且也能看见结界的裂缝……",
+    "source": "《卯酉东海道》第5曲：青木原的传说（节选）",
+    "url": "https://thbwiki.cc/卯酉东海道/附带故事",
+    "mapping": "完成卯酉特急后回响树海地下的见闻；双向共用一次机会。"
+  },
+  "m_matsumoto": {
+    "role": "maribel",
+    "group": "matsumoto",
+    "stations": [
+      "s037"
+    ],
+    "text": "我曾经见过一座城堡浮在空中。而且还是倒着的。",
+    "source": "《燕石博物志》第7曲：沉向空中的辉针城",
+    "url": "https://thbwiki.cc/燕石博物志/附带故事",
+    "mapping": "梅莉将倒悬城堡的外形比作松本城；不表示辉针城位于现实松本。"
+  },
+  "m_mito": {
+    "role": "maribel",
+    "group": "mito",
+    "stations": [
+      "s029"
+    ],
+    "text": "我将证明异界的存在！",
+    "source": "《七夕坂梦幻能》第4曲：Smoking Dragon",
+    "url": "https://thbwiki.cc/七夕坂梦幻能/附带故事",
+    "mapping": "以水户代表常陆地区，呼应常陆国七夕坂的异界探索；不认定七夕坂位于水户。"
+  },
+  "m_mito_reality": {
+    "role": "maribel",
+    "group": "mito",
+    "stations": [
+      "s029"
+    ],
+    "text": "异界是客观存在的。",
+    "source": "《七夕坂梦幻能》第11曲",
+    "url": "https://thbwiki.cc/七夕坂梦幻能/附带故事",
+    "mapping": "梅莉归来后与莲子讨论异界的实在性；水户仅作常陆地区映射。"
+  },
+  "m_south_kyushu": {
+    "role": "maribel",
+    "group": "south_kyushu",
+    "stations": [
+      "s096",
+      "s097"
+    ],
+    "text": "那么，高千穗峰上的那支天逆鉾也是真货咯。",
+    "source": "《伊奘诺物质》第10曲：在美妙的墓地里住下吧",
+    "url": "https://thbwiki.cc/伊奘诺物质/附带故事",
+    "mapping": "梅莉讨论神秘石片与高千穗峰天逆鉾的联系；宫崎与鹿儿岛中央共用南九州区域机会，不表示她已到访。"
+  },
+  "m_kyoto_dream": {
+    "role": "maribel",
+    "group": "kyoto",
+    "stations": [
+      "s060"
+    ],
+    "text": "我都要分不清哪个才是现实中的我了。",
+    "source": "《梦违科学世纪》第2曲：华胥之梦（节译）",
+    "url": "https://thbwiki.cc/梦违科学世纪/附带故事",
+    "mapping": "梅莉请求莲子听她讲梦；京都仅作梦境与现实边界的主题映射，与本局侵蚀状态无关。"
+  },
+  "m_fuji": {
+    "role": "maribel",
+    "group": "fuji",
+    "stations": [
+      "s051",
+      "s052"
+    ],
+    "text": "我还是想要看真正的实物啊。",
+    "source": "《卯酉东海道》第2曲：53分钟的蓝色大海（节选）",
+    "url": "https://thbwiki.cc/卯酉东海道/附带故事",
+    "mapping": "梅莉在广重号上谈屏幕中的富士山，想看真实风景；三岛与静冈共用富士区域机会。"
+  },
+  "y_kyoto": {
+    "role": "yukari",
+    "group": "kyoto",
+    "stations": [
+      "s060"
+    ],
+    "text": "只是我试着开了个洞而已。",
+    "source": "《东方妖妖梦》灵梦线 Phantasm（节译）",
+    "url": "https://thbwiki.cc/游戏对话:东方妖妖梦/博丽灵梦_PhStory/中日对照",
+    "mapping": "跨作品呼应莲台野入口。原句谈博丽结界，未认定紫制造了莲台野入口。"
+  },
+  "y_nagano": {
+    "role": "yukari",
+    "group": "nagano",
+    "stations": [
+      "s039"
+    ],
+    "text": "极乐与地狱的界线变得模糊……",
+    "source": "《东方妖妖梦》咲夜线 Phantasm（节译）",
+    "url": "https://thbwiki.cc/游戏对话:东方妖妖梦/十六夜咲夜_PhStory/中日对照",
+    "mapping": "跨作品呼应善光寺与地狱主题，原对白发生于冥界。"
+  },
+  "y_fuji": {
+    "role": "yukari",
+    "group": "fuji",
+    "stations": [
+      "s051",
+      "s052"
+    ],
+    "text": "真的不会死呢。",
+    "source": "《东方永夜抄》结界组 Extra，妹红战后（节译）",
+    "url": "https://thbwiki.cc/游戏对话:东方永夜抄/幻想的结界组_ExStory/中日对照",
+    "mapping": "三岛与静冈共用富士区域机会；借妹红的富士山符卡关联，不是紫在富士山的旅行实录。"
+  },
+  "y_fukuchiyama": {
+    "role": "yukari",
+    "group": "fukuchiyama",
+    "stations": [
+      "s068"
+    ],
+    "text": "我按照约定不让地上的妖怪进入这里。",
+    "source": "《东方地灵殿》灵梦（紫支援）第3面，勇仪战前",
+    "url": "https://thbwiki.cc/游戏对话:东方地灵殿/博丽灵梦（八云紫支援）/中日对照#Stage_3",
+    "mapping": "借勇仪主题曲《大江山的花之酒宴》关联福知山的大江山；不表示旧地狱位于现实福知山。"
+  },
+  "y_kyoto_boundary": {
+    "role": "yukari",
+    "group": "kyoto",
+    "stations": [
+      "s060"
+    ],
+    "text": "妖怪和人类的界线变得稀薄了……",
+    "source": "《东方妖妖梦》灵梦线 Phantasm（节译）",
+    "url": "https://thbwiki.cc/游戏对话:东方妖妖梦/博丽灵梦_PhStory/中日对照",
+    "mapping": "原对白发生于白玉楼；跨作品呼应京都莲台野的异界入口主题。"
+  },
+  "y_fuji_fear": {
+    "role": "yukari",
+    "group": "fuji",
+    "stations": [
+      "s051",
+      "s052"
+    ],
+    "text": "我也有很多害怕的东西哦。",
+    "source": "《东方永夜抄》结界组 Extra，妹红战后",
+    "url": "https://thbwiki.cc/游戏对话:东方永夜抄/幻想的结界组_ExStory/中日对照",
+    "mapping": "后续接“馒头可怕”的玩笑；借妹红的富士山符卡关联三岛与静冈，两站共用机会。"
+  }
+}

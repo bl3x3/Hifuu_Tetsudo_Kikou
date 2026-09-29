@@ -5,3 +5,31 @@ vendor/
 __pycache__/
 *.pyc
 design/
+
+# Local deployment settings, playtest records and generated exports
+server-config.json
+analysis/
+dist/
+optix7cache.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Credentials and local development files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+node_modules/
+
+# Optional original artwork (the game ships public/assets/*.webp)
+/assets/
+*.psd

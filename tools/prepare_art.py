@@ -1,4 +1,5 @@
 """Build local web assets from the supplied originals; no crop or repaint."""
+
 from pathlib import Path
 from PIL import Image
 

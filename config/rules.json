@@ -1,0 +1,19 @@
+{
+  "tick_ms": 2000,
+  "dialogue": {
+    "start_tick": 32,
+    "cooldown_ticks": 8,
+    "max_per_player": 2,
+    "first_probabilities": [
+      0.4,
+      0.7,
+      1.0
+    ],
+    "repeat_probability": 0.4
+  },
+  "events": {
+    "kyoto_protection_probability": 0.5,
+    "kyoto_dialogue_probability": 0.5,
+    "nagano_probability": 0.2
+  }
+}
