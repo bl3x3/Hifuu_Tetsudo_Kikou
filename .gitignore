@@ -1,0 +1,7 @@
+runtime/
+test-results/
+*.log
+vendor/
+__pycache__/
+*.pyc
+design/

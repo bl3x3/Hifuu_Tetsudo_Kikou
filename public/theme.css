@@ -1,0 +1,42 @@
+/* Color tokens; layout lives in style.css. */
+:root{
+ color-scheme:light;--ink:#28354b;--muted:#616777;--gold:#946c41;--line:#cdc3bf;
+ --accent:#704799;--accent-soft:#e8dfee;--page:#ede4d5;--paper:#f6f0e5;--panel:#fffaf0;--panel-soft:#eae6df;
+ --seat:#274864;--toolbar:#273449;--toolbar-ink:#f5eddf;--border:#c6bdc4;
+ --map-sea:#e9e0ce;--map-land:#fffbef;--map-label:#3f4657;--map-label-ink:#fff6e9;--map-coast:#c7b89f;
+ --atlas-board:#293c4b;--atlas-board-ink:#fbefd8;--atlas-board-muted:#d3cbbd;
+ --map-muted:#626e7b;--map-station:#fffaf0;--shadow:#39304416;
+ --notice:#e2e7e5;--notice-border:#69838b;--danger:#f1e1d0;--danger-ink:#7c482b;
+ --texture-opacity:.13;--window-art:var(--art-day,none);
+}
+:root[data-theme="night"]{
+ color-scheme:dark;--ink:#e4e3ef;--muted:#adb4c5;--gold:#d7b68b;--line:#42485e;
+ --accent:#be9aed;--accent-soft:#302c48;--page:#0b101c;--paper:#171d2c;--panel:#20293c;--panel-soft:#242c3e;
+ --seat:#91b3d3;--toolbar:#0a0d18;--toolbar-ink:#e8deef;--border:#424962;
+ --map-sea:#141a2b;--map-land:#34465c;--map-label:#eee6fa;--map-label-ink:#151c2c;--map-coast:#7b8da6;
+ --atlas-board:#202638;--atlas-board-ink:#e6ddf0;--atlas-board-muted:#b9b4c7;
+ --map-muted:#c1ccde;--map-station:#d4dcec;--shadow:#00000040;
+ --notice:#203247;--notice-border:#7396b8;--danger:#382b39;--danger-ink:#ecc39f;
+ --texture-opacity:.035;--window-art:var(--art-night,none);
+}
+.drawn-line,.moving-screen{--service-color:var(--line-color)}
+:root[data-theme="night"] :is(.drawn-line,.moving-screen){--service-color:color-mix(in srgb,var(--line-color) 65%,#cfd4ff)}
+:root[data-theme="night"] .line-code{color:#10172a}
+/* Preserve every route color and all station geometry. */
+#network #public-screen{fill:var(--map-sea)}
+#network [id^="land-"]{fill:var(--map-land)}
+#network rect[fill="#ffffff"]{fill:var(--panel)}
+#network text{fill:var(--ink)}
+#network text:is([fill="#547385"],[fill="#7594a6"],[fill="#53768b"],[fill="#66889b"],[fill="#8eacbd"],[fill="#927ba2"],[fill="#68737c"]){fill:var(--map-muted)}
+#network text:is([fill="#8751a8"],[fill="#75508e"]){fill:var(--accent)}
+#network rect[fill="#2878bc"]{fill:var(--accent)}
+#network rect.station-label[fill="#ffffff"]{fill:var(--map-land)}
+#network rect.station-label[fill="#213542"]{fill:var(--map-label)}
+#network text.station-label[fill="#ffffff"]{fill:var(--map-label-ink)}
+#network circle{fill:var(--map-station);stroke:var(--ink)}
+#network g[data-category] path:last-child{stroke:var(--route-color)}
+#network .edge[stroke="#ffffff"]{stroke:var(--map-land)}
+:root[data-theme="night"] #network g[data-category] path:last-child{stroke:color-mix(in srgb,var(--route-color) 65%,#cfd4ff)}
+#network .player-marker path,#network .player-marker circle{stroke:var(--ink)}
+#network .player-marker circle{fill:var(--panel)}
+#network .static-event-symbol{fill:var(--gold)}

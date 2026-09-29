@@ -1,0 +1,12 @@
+{
+  "scenes": {
+    "title": "/assets/title.webp",
+    "lobby": "/assets/boarding-lounge.webp",
+    "entry": "/assets/phone-entry.webp",
+    "day": "/assets/window-day.webp",
+    "night": "/assets/window-night.webp",
+    "paper": "/assets/paper.webp"
+  },
+  "roles": { "unknown": "/assets/avatar-unknown.webp", "renko": "/assets/avatar-renko.webp", "maribel": "/assets/avatar-maribel.webp", "yukari": "/assets/avatar-yukari.webp" },
+  "endings": { "hifuu": "/assets/ending-hifuu.webp", "yukari_direct": "/assets/ending-yukari.webp", "yukari_corrupted": "/assets/ending-yukari.webp", "draw": "/assets/ending-timeout.webp", "aborted": "/assets/journey-aborted.webp" }
+}
