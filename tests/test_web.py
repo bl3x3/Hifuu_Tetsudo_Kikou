@@ -7,6 +7,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from unittest.mock import patch
+from server import game
 from server.web import Server, Store, public_url, configured_public_url
 
 
@@ -73,6 +74,121 @@ class WebTest(unittest.TestCase):
 
     def room(self):
         return self.request('/api/rooms', {})[1]
+
+    def test_restored_lobbies_free_capacity_without_losing_rooms_or_credentials(self):
+        store = self.server.store
+        snapshots = {}
+        credentials = []
+        for i in range(12):
+            room = game.create_room(f'R{i:04d}', 10000)
+            player = game.join(room, f'旅人{i}', 10000)
+            store.rooms[room['code']] = room
+            store.save(room)
+            snapshots[room['code']] = (
+                Path(self.temp.name) / f"room-{room['code']}.json"
+            ).read_bytes()
+            credentials.append((room['code'], room['hostToken'], player['token'], player['id']))
+
+        # Zero is the restored "not seen" marker even early in the new process's uptime.
+        with patch('server.web.now_ms', return_value=60000):
+            self.server.store = Store(Path(self.temp.name))
+            for room in self.server.store.rooms.values():
+                self.assertEqual(room['hostSeen'], 0)
+                self.assertTrue(all(player['seen'] == 0 for player in room['players']))
+            status, created = self.request('/api/rooms', {})
+            self.assertEqual(status, 200)
+            self.assertEqual(len(self.server.store.rooms), 13)
+            self.assertNotIn(created['code'], snapshots)
+            for code, snapshot in snapshots.items():
+                path = Path(self.temp.name) / f'room-{code}.json'
+                self.assertTrue(path.read_bytes() == snapshot, 'existing snapshot was changed')
+                status, state = self.request(f'/api/state?room={code}')
+                self.assertEqual(status, 200)
+                self.assertEqual(state['phase'], 'lobby')
+
+            code, host_token, player_token, player_id = credentials[0]
+            status, state = self.request(
+                '/api/host', dict(room=code, kind='dialogue', enabled=True), host_token
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(state['dialogueEnabled'])
+            status, state = self.request(
+                '/api/player', dict(room=code, kind='ready'), player_token
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(state['me']['id'], player_id)
+            ready_player = next(player for player in state['players'] if player['id'] == player_id)
+            self.assertTrue(ready_player['ready'])
+
+    def test_idle_lobbies_free_capacity_even_when_background_advance_updates_them(self):
+        now = 2000000
+        idle = now - 30 * 60 * 1000 - 1
+        for i in range(12):
+            room = game.create_room(f'I{i:04d}', idle)
+            game.join(room, f'旅人{i}', idle)
+            game.advance(room, now)
+            self.server.store.rooms[room['code']] = room
+            self.assertEqual(room['updated'], now)
+
+        with patch('server.web.now_ms', return_value=now):
+            status, _ = self.request('/api/rooms', {})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(self.server.store.rooms), 13)
+        self.assertTrue(all(room['phase'] == 'lobby' for room in self.server.store.rooms.values()))
+
+    def test_twelve_recent_lobbies_still_reject_new_rooms(self):
+        now = 2000000
+        for i in range(12):
+            room = game.create_room(f'A{i:04d}', now - 30 * 60 * 1000 + 1)
+            self.server.store.rooms[room['code']] = room
+
+        with patch('server.web.now_ms', return_value=now):
+            status, body = self.request('/api/rooms', {})
+        self.assertEqual(status, 400)
+        self.assertIn('活动房间过多', body['error'])
+        self.assertEqual(len(self.server.store.rooms), 12)
+
+    def test_player_heartbeat_keeps_lobby_active_when_host_is_idle(self):
+        now = 2000000
+        for i in range(11):
+            room = game.create_room(f'A{i:04d}', now - 1000)
+            self.server.store.rooms[room['code']] = room
+        room = game.create_room('GUEST', now - 31 * 60 * 1000)
+        game.join(room, '仍在等候的旅人', now - 1000)
+        self.server.store.rooms[room['code']] = room
+
+        with patch('server.web.now_ms', return_value=now):
+            status, body = self.request('/api/rooms', {})
+        self.assertEqual(status, 400)
+        self.assertIn('活动房间过多', body['error'])
+        self.assertEqual(len(self.server.store.rooms), 12)
+
+    def test_in_progress_games_keep_capacity_even_with_old_heartbeats(self):
+        now = 2000000
+        idle = now - 31 * 60 * 1000
+        for phase in ('briefing', 'running'):
+            with self.subTest(phase=phase):
+                self.server.store.rooms.clear()
+                for i in range(12):
+                    room = game.create_room(f'P{i:04d}', now)
+                    for name in ('旅人甲', '旅人乙', '旅人丙'):
+                        game.join(room, name, now)['ready'] = True
+                    game.setup(room, 'S05', now)
+                    if phase == 'running':
+                        game.launch(room, now, True)
+                    room['hostSeen'] = idle
+                    for player in room['players']:
+                        player['seen'] = idle
+                    self.server.store.rooms[room['code']] = room
+
+                with patch('server.web.now_ms', return_value=now):
+                    status, body = self.request('/api/rooms', {})
+                self.assertEqual(status, 400)
+                self.assertIn('活动房间过多', body['error'])
+                self.assertEqual(len(self.server.store.rooms), 12)
+                self.assertTrue(
+                    all(room['phase'] == phase for room in self.server.store.rooms.values())
+                )
 
     def test_server_configuration_is_not_served_as_static_content(self):
         for path in (
@@ -270,12 +386,12 @@ class WebTest(unittest.TestCase):
         host = self.room()
         code = host['code']
         players = []
-        for i in range(3):
+        for i in range(6):
             status, p = self.request('/api/join', dict(room=code, name=f'玩家{i}'))
             self.assertEqual(status, 200)
             players.append(p)
             self.request('/api/player', dict(room=code, kind='ready'), p['token'])
-        self.assertEqual(self.request('/api/join', dict(room=code, name='第四人'))[0], 400)
+        self.assertEqual(self.request('/api/join', dict(room=code, name='第七人'))[0], 400)
         self.assertEqual(
             self.request('/api/host', dict(room=code, kind='setup'), players[0]['token'])[0], 403
         )
@@ -293,7 +409,7 @@ class WebTest(unittest.TestCase):
                 self.assertNotIn(private, json.dumps(state))
         first = self.request(f'/api/state?room={code}', token=players[0]['token'])[1]
         self.assertEqual(first['me']['id'], players[0]['id'])
-        self.assertIn(first['me']['role'], ('renko', 'maribel', 'yukari'))
+        self.assertIn(first['me']['role'], ('renko', 'maribel', 'yukari', 'sumireko'))
         status, conflict = self.request(
             '/api/player',
             dict(room=code, kind='wait', seq=1, version=-1, batch=first['me']['batch']),

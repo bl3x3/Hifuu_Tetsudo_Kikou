@@ -46,13 +46,16 @@ def main():
                     phone.on('pageerror',lambda e:errors.append(str(e)))
                     phone.add_init_script('localStorage.setItem("hifuu-player:HUMAN",'+json.dumps(p['token'])+')')
                     phone.goto(base+'/join?room=HUMAN');phone.locator('.station-axis').wait_for()
-                    timer=phone.locator('.destination-actions [data-clock=decision]')
-                    box=timer.bounding_box()
+                    # The first leg is untimed; the ticket asks for a stop, never a countdown.
+                    assert phone.locator('[data-clock=decision]').count()==0
+                    assert phone.locator('.station-stamp').inner_text()=='首程选路'
+                    prompt=phone.locator('.destination-actions > p')
+                    box=prompt.bounding_box()
                     assert box and box['y']>=0 and box['y']+box['height']<=height,(width,box)
-                    before=timer.inner_text()
+                    assert '请在站点轴上选择目的地' in prompt.inner_text()
                     phone.evaluate('window.savedAxis=document.querySelector(".station-axis")')
                     phone.wait_for_timeout(1400)
-                    assert timer.inner_text()!=before
+                    assert phone.locator('[data-clock=decision]').count()==0
                     assert phone.evaluate('window.savedAxis===document.querySelector(".station-axis")')
                     phone.screenshot(path=str(out/f'countdown-{width}.png'))
                     # Lock submission while a different player owns the current decision window.
@@ -64,7 +67,8 @@ def main():
                     destination=target.get_attribute('data-destination')
                     target.click();phone.locator('[data-action=travel]').click()
                     phone.locator('.submitted-ticket').wait_for()
-                    assert '等待 2号' in phone.locator('.submitted-ticket').inner_text()
+                    # Only a count is public; who is still choosing stays private.
+                    assert '等待 1名' in phone.locator('.submitted-ticket').inner_text()
                     assert phone.locator('[data-action=travel]').count()==0
                     assert room['decision']['choices'][str(p['id'])]['card']['nodes'][-1]==destination
                     phone.screenshot(path=str(out/f'submitted-{width}.png'))
@@ -90,25 +94,32 @@ def main():
                     assert phone.locator('.position-status').inner_text()!=progress
                     phone.screenshot(path=str(out/f'moving-{width}.png'))
                     assert phone.evaluate('document.documentElement.scrollWidth<=innerWidth')
-                    phone.close();results.append(dict(width=width,countdown_visible=True,submitted_locked=True,stable_station_dom=True,stable_moving_dom=True))
-                # Expiry is prominent immediately, rather than below the ticket axis.
+                    phone.close();results.append(dict(width=width,untimed_first_leg=True,submitted_locked=True,stable_station_dom=True,stable_moving_dom=True))
+                # A host-forced stay is prominent immediately, rather than below the ticket axis.
                 with server.store.lock:
-                    room.update(phase='briefing',updated=now_ms())
-                    p.update(station='s023',trip=None,queued=None)
+                    room.update(phase='briefing',updated=now_ms(),tickMs=60000,railAccum=0)
+                    p.update(station='s023',trip=None,queued=None,waitUntil=0,holdUntil=0)
                     game.open_decision(room,room['players'],initial=True)
-                    room['decision']['remaining']=0
+                    game.launch(room,now_ms(),force=True)
                 phone=browser.new_page(viewport=dict(width=320,height=568),is_mobile=True,has_touch=True)
                 phone.add_init_script('localStorage.setItem("hifuu-player:HUMAN",'+json.dumps(p['token'])+')')
-                phone.goto(base+'/join?room=HUMAN');phone.locator('.submitted-ticket').wait_for()
-                assert '已自动留站' in phone.locator('.submitted-ticket').inner_text()
-                assert phone.locator('.submitted-ticket h1').bounding_box()['y']<300
-                phone.screenshot(path=str(out/'timeout-320.png'))
+                phone.goto(base+'/join?room=HUMAN');phone.locator('.station-axis').wait_for()
+                assert phone.locator('.station-stamp').inner_text()=='留站等候'
+                stay=phone.locator('.location p').first
+                assert '留站至' in stay.inner_text()
+                assert stay.bounding_box()['y']<300
+                assert phone.locator('[data-action=travel]').is_disabled()
+                assert phone.locator('[data-action=wait]').is_disabled()
+                # The ticket says why nothing can be picked, and the axis looks inactive.
+                assert '留站中' in phone.locator('.destination-actions > p').inner_text()
+                assert phone.locator('.station-axis.is-locked').count()==1
+                phone.screenshot(path=str(out/'forced-wait-320.png'))
                 join=browser.new_page(locale='en-US');join.goto(base+'/join')
                 join.locator('[name=room]').fill('AB');join.locator('[name=name]').fill('test')
                 join.locator('[type=submit]').click();join.locator('#toast.show').wait_for()
                 assert '房间码为5位' in join.locator('#toast').inner_text()
                 assert not errors,errors
-                report=dict(status='passed',phones=results,timeout_prominent=True,chinese_validation=True,errors=errors)
+                report=dict(status='passed',phones=results,forced_wait_prominent=True,chinese_validation=True,errors=errors)
                 (out/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
                 print(json.dumps(report));browser.close()
         finally:

@@ -71,7 +71,7 @@ def main():
                 assert host.locator('.lobby-stage .title-art').get_attribute('src') == '/assets/title.webp'
                 assert host.locator('.map-frame').is_hidden()
                 assert host.locator('.role-icon').count() == 0
-                host.wait_for_function('()=>Array.from(document.querySelectorAll(".public-avatar img")).length===3 && Array.from(document.querySelectorAll(".public-avatar img")).every(i=>i.naturalWidth>0 && i.src.endsWith("avatar-unknown.webp"))')
+                host.wait_for_function('()=>Array.from(document.querySelectorAll(".public-avatar img")).length===6 && Array.from(document.querySelectorAll(".public-avatar img")).every(i=>i.naturalWidth>0 && i.src.endsWith("avatar-unknown.webp"))')
                 host.screenshot(path=str(output / 'lobby-desktop.png'))
                 for width, height in ((320, 700), (390, 844), (560, 800), (1024, 768), (1920, 1080)):
                     host.set_viewport_size(dict(width=width, height=height))
@@ -95,9 +95,11 @@ def main():
                     game.setup(room, 'random', now_ms())
                     room['decision']['remaining'] = 300000
                     for p, role, station in zip(room['players'], ('renko', 'maribel', 'yukari'), ('s060', 's063', 's088')):
-                        p.update(role=role, station=station, lastArrival=dict(station=station, tick=0))
+                        p.update(role=role, station=station, lastArrival=dict(station=station, tick=0),
+                                 lastSighting=dict(station=station, tick=0))
                         game.deal(room, p)
                     me = room['players'][0]
+                    room['hat']['holder'] = me['id']
                     me['hand'] = [game.line_offer(EDGE_LINE['e068'], 's060', 'art-long-line')]
                 update()
                 phone = browser.new_page(viewport=dict(width=390, height=844), is_mobile=True, has_touch=True)
@@ -108,15 +110,20 @@ def main():
                 phone.wait_for_function('()=>document.querySelector(".identity .role-icon img")?.naturalWidth>0')
                 assert phone.locator('.identity .role-icon img').get_attribute('src') == '/assets/avatar-renko.webp'
                 host.wait_for_function('()=>document.querySelector(".arrival-list .public-avatar img")?.naturalWidth>0')
-                assert host.locator('.arrival-list img[src="/assets/avatar-renko.webp"]').count() == 1
-                assert host.locator('.arrival-list img[src="/assets/avatar-unknown.webp"]').count() == 2
-                assert host.locator('.traveler').first.locator('span').all_text_contents() == ['宇佐见莲子',room['players'][0]['name']]
-                assert host.locator('.traveler').first.evaluate('(element)=>getComputedStyle(element.children[0]).fontSize===getComputedStyle(element.children[1]).fontSize')
-                assert host.locator('.player-marker image[href="/assets/avatar-renko.webp"]').count() == 1
-                assert host.locator('.player-marker image[href="/assets/avatar-unknown.webp"]').count() == 2
-                assert host.locator('.player-marker text').all_text_contents() == ['秘','秘','秘']
+                assert host.locator('.arrival-list .public-avatar[data-appearance=brown]').count() == 1
+                assert host.locator('.arrival-list .public-avatar[data-appearance=purple]').count() == 2
+                assert '宇佐见莲子' not in host.locator('.arrival-list').inner_text()
+                # No Sumireko has met Renko, so her brown letter still names the seat.
+                assert f"{me['seat']}号 · {me['name']}" in host.locator('.arrival-list').inner_text()
+                assert host.locator('.player-marker[data-appearance=brown]').count() == 1
+                assert host.locator('.player-marker[data-appearance=purple]').count() == 2
+                assert host.locator('.player-marker[data-player]').count() == 0
+                assert host.locator('.player-marker .hat-marker').count() == 1
                 host.screenshot(path=str(output / 'map-public-avatars.png'))
                 assert phone.locator('.axis-stop').count() == len(me['hand'][0]['nodes'])
+                # The line map is open above the stop list from the first pick onward.
+                assert phone.locator('.drawn-line > .line-map').is_visible()
+                assert phone.locator('.line-map .lm-goal').count() == 0
                 for width in (320, 360, 390, 430):
                     phone.set_viewport_size(dict(width=width, height=844))
                     fits(phone)
@@ -126,6 +133,7 @@ def main():
                 phone.set_viewport_size(dict(width=390, height=844))
                 phone.screenshot(path=str(output / 'station-viewport.png'))
                 phone.locator('.axis-stop:not(:disabled)').last.click()
+                assert phone.locator('.line-map .lm-goal').count() == 1
                 selected = phone.locator('.axis-stop.selected').get_attribute('data-destination')
                 axis_scroll = phone.locator('.station-axis').evaluate('(e)=>e.scrollTop')
                 update()
@@ -147,38 +155,59 @@ def main():
                     me['station'] = 's023'
                     me['queued'] = game.make_card(['s023', 's060'], [EDGE_BY_ID['e131']], 'art-express')
                     game.depart(room, me)
-                update(phase='running', tick=8)
+                update(phase='running', tick=8, tickMs=60000, railAccum=0)
                 phone.locator('.moving-screen.is-traveling').wait_for()
-                phone.evaluate('window.scenery=document.querySelector(".window-landscape")')
-                phone.wait_for_timeout(250)
-                before = phone.locator('.window-landscape').evaluate('(e)=>e.getAnimations()[0].currentTime')
+                # The window scenery is replaced by the whole current line, drawn like the atlas.
+                assert phone.locator('.train-window, .window-landscape').count() == 0
+                line = EDGE_LINE['e131']
+                routes = phone.locator('.line-map .lm-route')
+                assert sorted(routes.evaluate_all('(es)=>es.map(e=>e.dataset.edge)')) == sorted(line['edges'])
+                assert phone.locator('.line-map .lm-stop').count() == len(line['nodes'])
+                assert phone.locator('.line-map').evaluate(
+                    '(e)=>e.style.getPropertyValue("--route-color")') == line['color']
+                assert routes.first.get_attribute('stroke-dasharray')
+                assert phone.locator('.line-map .lm-route.is-trip').count() == 1
+                assert line['name'] in phone.locator('.line-map figcaption').inner_text()
+                distance_to_kyoto = """()=>{
+                    const m = document.querySelector('.line-map .lm-you').transform.baseVal[0].matrix;
+                    return Math.hypot(m.e - 1470, m.f - 1730);
+                }"""
+                with server.store.lock:
+                    me['trip']['remaining'] = 3
                 update()
                 phone.wait_for_timeout(900)
-                assert phone.evaluate('window.scenery===document.querySelector(".window-landscape")')
-                after = phone.locator('.window-landscape').evaluate('(e)=>e.getAnimations()[0].currentTime')
-                assert after > before + 500, (before, after)
+                early = phone.evaluate(distance_to_kyoto)
+                with server.store.lock:
+                    me['trip']['remaining'] = 1
+                update()
+                phone.wait_for_timeout(900)
+                assert phone.evaluate(distance_to_kyoto) < early - 100
+                assert phone.locator('.journey-countdown [data-clock=eta]').inner_text().startswith('第')
+                pulse = '(e)=>getComputedStyle(e).animationName'
+                assert phone.locator('.lm-pulse').evaluate(pulse) != 'none'
                 for mode in ('hold', 'stop', 'decision'):
                     with server.store.lock:
                         me.update(holdUntil=room['tick'] + 2 if mode == 'hold' else 0,
                                   station='s023' if mode == 'stop' else None)
                     update(phase='decision' if mode == 'decision' else 'running')
                     phone.locator('.moving-screen.is-stopped').wait_for()
-                    phone.wait_for_timeout(800)
-                    assert phone.locator('.window-landscape').evaluate('(e)=>getComputedStyle(e).animationPlayState') == 'paused'
-                    t = phone.locator('.window-landscape').evaluate('(e)=>e.getAnimations()[0].currentTime')
-                    phone.wait_for_timeout(200)
-                    assert abs(phone.locator('.window-landscape').evaluate('(e)=>e.getAnimations()[0].currentTime') - t) < 2
+                    assert phone.locator('.lm-pulse').evaluate(pulse) == 'none'
                 update(phase='running')
                 phone.locator('.moving-screen.is-traveling').wait_for()
                 phone.context.set_offline(True)
                 phone.locator('#connection.offline').wait_for(timeout=8000)
-                assert phone.locator('.window-landscape').evaluate('(e)=>getComputedStyle(e).animationPlayState') == 'paused'
+                assert phone.locator('.lm-pulse').evaluate(pulse) == 'none'
                 phone.context.set_offline(False)
                 phone.locator('.moving-screen.is-traveling').wait_for(timeout=8000)
                 phone.emulate_media(reduced_motion='reduce')
-                assert phone.locator('.window-landscape').evaluate('(e)=>getComputedStyle(e).animationName') == 'none'
+                assert phone.locator('.lm-pulse').evaluate(pulse) == 'none'
                 phone.emulate_media(reduced_motion='no-preference')
-                checks.append('scenery continuity, hold, layover, decision, offline, reduced motion')
+                for width in (320, 430):
+                    phone.set_viewport_size(dict(width=width, height=844))
+                    fits(phone)
+                phone.set_viewport_size(dict(width=390, height=844))
+                phone.screenshot(path=str(output / 'phone-line-map.png'))
+                checks.append('line map replaces window: atlas edges/colors, live position, ETA, paused pulse')
 
                 with server.store.lock:
                     nodes=['s059','s060','s063']
@@ -261,7 +290,7 @@ def main():
                 assert spectator.locator('.room-code').inner_text()==next_code
                 assert phone.url.endswith('/join?room=ARTQA')
                 spectator.screenshot(path=str(output / 'spectator-new-room.png'))
-                checks.append('public role avatars, equal identity/name lines, and automatic spectator room switch across browser contexts')
+                checks.append('public appearance-group avatars, anonymous brown identities, and automatic spectator room switch across browser contexts')
                 assert not errors, errors
                 browser.close()
             report = dict(status='passed', checks=checks, limitations='Chromium mobile emulation; physical phones and venue projection still need a visual check.')

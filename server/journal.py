@@ -94,6 +94,7 @@ def record(room):
                 initial=opened['initial'],
                 tick=opened['tick'],
                 required=opened['required'],
+                encounter=opened.get('encounter'),
                 closed=bool(closed),
                 durationSeconds=(
                     round((stop - begin) / 1000, 3)
@@ -142,6 +143,7 @@ def record(room):
                 hostForcedWaits=sum(e.get('source') == 'host' for e in actions) if clock else None,
                 changes=sum(e['type'] == 'change' for e in own) if clock else None,
                 stopRequests=sum(e['type'] == 'stop_requested' for e in own),
+                encounterConfirmations=sum(e['type'] == 'encounter_confirm' for e in own),
                 waitRequests=sum(e['type'] == 'request_wait' for e in own),
                 acceptedWaitRequests=sum(
                     e['type'] == 'request_response' and e.get('accepted') for e in own
@@ -163,7 +165,7 @@ def record(room):
             tickMs=room['tickMs'],
             minutesPerTick=15,
             dialogueEnabled=room.get('dialogueEnabled', False),
-            rulesVersion='2026-09-28-flow' if clock else None,
+            rulesVersion=room.get('rulesVersion', '2026-09-28-flow') if clock else None,
             disconnectTimeoutSeconds=90 if clock else None,
             autoContinueSeconds=3 if clock else None,
             waitMinutes=30 if clock else None,

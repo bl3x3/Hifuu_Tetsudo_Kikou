@@ -41,7 +41,7 @@ async def main():
                 await page.get_by_role('button', name='已了解，准备出发').click()
                 await page.wait_for_function("() => document.querySelector('button[data-action=ready]')?.disabled === true")
                 phones.append(page)
-            await host.get_by_role('button', name='开始游戏 · 分配身份').click()
+            await host.get_by_role('button', name='开始游戏并分配身份').click()
             for page in phones:
                 await page.locator('.identity').wait_for()
             token = await phones[0].evaluate("() => Object.keys(sessionStorage).map(k=>sessionStorage[k])[0]")
@@ -55,33 +55,42 @@ async def main():
 
             # ---- destination pick updates the ticket, not the server ----
             phone = phones[0]
+            check('the untimed first leg shows no decision countdown',
+                  await phone.locator('[data-clock=decision]').count() == 0)
             stops = phone.locator('.axis-stop:not(.current)')
             check('the full line axis is offered', await stops.count() >= 1, await stops.count())
-            target = await stops.last.get_attribute('data-destination')
             await stops.last.click()
             ticket = await phone.locator('.ticket-route').inner_text()
             check('tapping a stop fills the ticket without submitting',
                   '选择目的地' not in ticket, ticket.replace('\n', ' '))
+            chosen_name = (await phone.locator('.ticket-route b').last.inner_text()).strip()
             confirm = phone.get_by_role('button', name='确认此程')
             check('confirm unlocks only after a destination is chosen', await confirm.is_enabled())
             await confirm.click()
-            await phone.wait_for_function("() => document.querySelector('.notice')?.textContent.includes('已收到你的选择')")
-            check('submitting shows the received notice', True)
-            # ---- a second tap must not break the window ----
-            if await stops.count() > 1:
-                await stops.first.click()
-                await confirm.click()
-                await phone.wait_for_timeout(800)
-                toast = await phone.locator('#toast').inner_text()
-                check('re-picking inside the same window is handled without a raw error',
-                      '行动窗口' not in toast, toast or '(no toast)')
+            submitted = phone.locator('.submitted-ticket')
+            await submitted.wait_for()
+            check('submitting shows the confirmed ticket naming the destination',
+                  '已提交' in await submitted.inner_text()
+                  and chosen_name in await submitted.locator('h2').inner_text(),
+                  (await submitted.inner_text()).replace('\n', ' '))
+            # ---- a submitted trip is locked; there is no second pick ----
+            check('a submitted route cannot be re-picked',
+                  await phone.locator('.axis-stop, [data-action=travel]').count() == 0)
+            check('the locked ticket says so',
+                  await phone.get_by_role('button', name='行程已锁定').is_disabled())
             # ---- change line before submitting ----
             # Phone 2 opens the change panel and swaps its drawn line.
             phone2 = phones[1]
             token2 = await phone2.evaluate("() => Object.keys(sessionStorage).map(k=>sessionStorage[k])[0]")
             before = await phone2.locator('.drawn-line h2').inner_text()
             options = await phone2.locator('#change-edge option').count()
-            check('change panel lists the other lines at this station', options >= 1, options)
+            before_me2 = await host.evaluate(
+                """async ([code, token]) => (await (await fetch('/api/state?room='+code, {headers:{Authorization:'Bearer '+token}})).json()).me""",
+                [code, token2])
+            # Random starts: some stations have a single line and nothing to change to.
+            others = [l for l in before_me2['availableLines'] if l['id'] != before_me2['hand'][0]['lineId']]
+            check('change panel lists the other lines at this station', options == len(others),
+                  f'{options} options / {len(others)} other lines')
             if options:
                 chosen = await phone2.locator('#change-edge option').first.get_attribute('value')
                 await phone2.locator('#change-panel').evaluate('(e)=>e.open=true')
@@ -105,20 +114,33 @@ async def main():
             # ---- wait state is visible and counted down ----
             phone3 = phones[2]
             await phone3.get_by_role('button', name='留站等候30分钟').click()
-            await phone3.wait_for_timeout(1500)
-            check('waiting at a station is announced on the phone',
-                  '留站等候' in (await phone3.locator('.location').inner_text()), '')
+            await phone3.locator('.submitted-ticket').wait_for()
+            ticket3 = await phone3.locator('.submitted-ticket').inner_text()
+            check('waiting at a station is announced on the phone', '留站等候30分钟' in ticket3,
+                  ticket3.replace('\n', ' '))
             check('the wait button reports itself as received',
-                  await phone3.locator('.notice').count() == 1)
+                  await phone3.get_by_role('button', name='留站已锁定').is_disabled()
+                  and '已选择留站' in ticket3)
             # ---- public arrival record is available but collapsed ----
             public = phone3.locator('#phone-public')
             check('public arrival record exists and starts collapsed',
                   await public.count() == 1 and not await public.evaluate('(e)=>e.open'))
-            rows = await public.locator('p').count()
-            check('public arrival record lists all three seats', rows == 3, rows)
+            # Nobody has arrived anywhere before departure.
+            check('public arrival record starts empty before departure',
+                  await public.locator('.activity-empty').count() == 1
+                  and await public.locator('.activity-item').count() == 0)
+            # Sightings: one brown letter with its seat (no Sumireko to meet), two purple seats.
+            await host.locator('.arrival-list .sighting-tag').nth(2).wait_for()
+            tags = await host.locator('.arrival-list .sighting-tag').all_text_contents()
             host_text = await host.locator('.arrival-list').inner_text()
-            check('the board shows the same three seat numbers',
-                  all(str(n) in host_text for n in (1, 2, 3)), host_text.replace('\n', ' ')[:80])
+            seats = [t for t in tags if t.isdigit()]
+            brown_seat = ({'1', '2', '3'} - set(seats)).pop() if len(seats) == 2 else None
+            check('the board lists every traveler once', len(tags) == 3 and len(set(tags)) == 3, tags)
+            check('the brown traveler shows a letter on the map and its seat in the list',
+                  tags[0] == 'A' and f'棕色旅人 A · {brown_seat}号 · P{brown_seat}' in host_text,
+                  host_text.replace('\n', ' ')[:120])
+            check('purple sightings show seat number and nickname',
+                  all(f'{n}号 · P{n}' in host_text for n in seats), host_text.replace('\n', ' ')[:120])
             await phone3.screenshot(path=str(ROOT / 'test-results' / 'playtest' / 'phone-waiting.png'), full_page=True)
             await phones[1].screenshot(path=str(ROOT / 'test-results' / 'playtest' / 'phone-after-change.png'), full_page=True)
             await browser.close()
@@ -129,6 +151,8 @@ async def main():
     log(f'checks={len(results)} failed={len(failed)}')
     for ok, name, detail in failed:
         log(f'  !! {name}: {detail}')
+    if failed:
+        sys.exit(1)
 
 
 asyncio.run(main())

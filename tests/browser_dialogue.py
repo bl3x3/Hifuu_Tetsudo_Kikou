@@ -63,7 +63,7 @@ def main():
                     game.resolve_dialogues(room, [dict(id=1000,player=m,station='s060',stop=True)], lambda _: 0)
                 host.locator('#board-dialogue:not([hidden])').wait_for()
                 assert '<回声旅人>' in host.locator('#board-dialogue').inner_text()
-                assert host.locator('#board-dialogue img').get_attribute('alt') == '身份未公开'
+                assert host.locator('#board-dialogue img').get_attribute('alt') == '紫色旅人'
                 assert host.locator('#board-dialogue a').count() == 0
                 box = host.locator('#board-dialogue').bounding_box()
                 assert box and box['y']+box['height'] <= 1080

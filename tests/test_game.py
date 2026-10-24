@@ -171,7 +171,7 @@ class RulesTest(unittest.TestCase):
                 game.deal(room,p)
                 self.assertEqual(p['hand'][0]['lineId'],lines[0]['id'])
 
-    def test_submitted_choice_is_locked_and_only_pending_seats_are_public(self):
+    def test_submitted_choice_is_locked_and_only_pending_count_is_public(self):
         room,r,m,y=prepared()
         game.open_decision(room,[m])
         command(room,r,'travel',card=r['hand'][0]['id'])
@@ -180,7 +180,8 @@ class RulesTest(unittest.TestCase):
         self.assertTrue(private['me']['submitted'])
         self.assertFalse(private['me']['canAct'])
         self.assertFalse(private['me']['canChange'])
-        self.assertEqual(private['pendingPlayers'],[m['id']])
+        self.assertEqual(private['pendingCount'],1)
+        self.assertNotIn('pendingPlayers',private)
         self.assertNotIn('chosenDestination',game.public_state(room,10000))
         with self.assertRaises(ValueError):command(room,r,'wait')
         self.assertEqual(room['decision']['choices'],before)
@@ -189,54 +190,28 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(room['phase'],'running')
         self.assertIsNotNone(r['trip'])
 
-    def test_request_wait_accept_locks_target_and_requires_host_continue(self):
+    def test_removed_wait_requests_cannot_probe_or_lock_other_players(self):
         room,r,m,y=prepared()
         game.open_decision(room,[r,m])
-        command(room,r,'request_wait',target=m['id'])
-        self.assertTrue(r['requestUsed'])
-        self.assertEqual(room['decision']['request']['status'],'pending')
-        public=game.public_state(room,10000)
-        self.assertEqual(public['request']['requesterSeat'],r['seat'])
-        self.assertEqual(public['request']['targetSeat'],m['seat'])
-        command(room,m,'respond_request',accept=True)
-        self.assertEqual(room['decision']['choices'][str(m['id'])]['kind'],'wait')
-        self.assertEqual(room['phase'],'decision')
+        before=copy.deepcopy(room['decision'])
+        for actor,kind,fields in ((r,'request_wait',dict(target=m['id'])),
+                                  (m,'respond_request',dict(accept=True)),
+                                  (m,'respond_request',dict(accept=False))):
+            with self.assertRaises(ValueError):
+                command(room,actor,kind,**fields)
+        self.assertEqual(room['decision'],before)
+        for viewer in room['players']:
+            state=game.private_state(room,viewer,10000)
+            for removed in ('request','requests','requestUsed','canRequestWait'):
+                self.assertNotIn(removed,state)
+                self.assertNotIn(removed,state['me'])
+        self.assertNotIn('requestUsed',r)
+        command(room,m,'travel',card=m['hand'][0]['id'])
         command(room,r,'wait')
         game.continue_decision(room)
         self.assertEqual(room['phase'],'running')
-        self.assertEqual(m['waitUntil'],2)
-
-    def test_request_wait_decline_keeps_target_choice_open(self):
-        room,r,m,y=prepared()
-        game.open_decision(room,[r,m])
-        command(room,r,'request_wait',target=m['id'])
-        command(room,m,'respond_request',accept=False)
-        self.assertNotIn(str(m['id']),room['decision']['choices'])
-        command(room,m,'travel',card=m['hand'][0]['id'])
-        self.assertEqual(room['decision']['choices'][str(m['id'])]['kind'],'travel')
-        self.assertEqual(game.public_state(room,10000)['request']['status'],'declined')
-
-    def test_request_limits_one_per_batch_and_per_player(self):
-        room,r,m,y=prepared()
-        game.open_decision(room,[r,m])
-        command(room,r,'request_wait',target=m['id'])
-        with self.assertRaises(ValueError):
-            command(room,m,'request_wait',target=r['id'])
-        command(room,m,'respond_request',accept=False)
-        command(room,r,'wait')
-        command(room,m,'wait')
-        game.continue_decision(room)
-        game.open_decision(room,[r,m])
-        with self.assertRaises(ValueError):
-            command(room,r,'request_wait',target=m['id'])
-
-    def test_request_projection_does_not_expose_private_route_or_identity(self):
-        room,r,m,y=prepared()
-        game.open_decision(room,[r,m])
-        command(room,r,'request_wait',target=m['id'])
-        text=json.dumps(game.public_state(room,10000),ensure_ascii=False)
-        for forbidden in (r['hand'][0]['id'],m['hand'][0]['id'],'maribel','yukari','requestUsed'):
-            self.assertNotIn(forbidden,text)
+        self.assertEqual(r['waitUntil'],2)
+        self.assertIsNotNone(m['trip'])
 
     def test_rejoining_reuses_seat_without_reusing_player_identity(self):
         room = game.create_room('SEATS', 10000)
@@ -804,11 +779,10 @@ class RulesTest(unittest.TestCase):
                 game.continue_decision(room)
                 self.assertEqual(room['phase'],'running')
 
-    def test_accepted_request_starts_auto_countdown(self):
+    def test_voluntary_wait_starts_auto_countdown(self):
         room,r,m,y=prepared()
         game.open_decision(room,[m])
-        command(room,r,'request_wait',target=m['id'])
-        command(room,m,'respond_request',accept=True)
+        command(room,m,'wait')
         self.assertEqual(room['decision']['remaining'],3000)
         self.advance_connected(room,3000)
         self.assertEqual(room['phase'],'running')

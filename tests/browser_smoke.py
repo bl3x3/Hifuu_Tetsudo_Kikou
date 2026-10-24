@@ -43,7 +43,7 @@ def main():
                     bounds=button.bounding_box()
                     assert bounds['x']>=0 and bounds['x']+bounds['width']<=width
                     assert bounds['y']>=0 and bounds['y']+bounds['height']<=height
-                    assert '已加入 0/3 人' in host.locator('#host-start-status').inner_text()
+                    assert '已加入 0/6 人' in host.locator('#host-start-status').inner_text()
                     assert host.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 host.screenshot(path=str(output/'board-lobby.png'))
                 phones=[]
@@ -65,6 +65,7 @@ def main():
                     for p in room['players']:
                         p['station']={'renko':'s060','maribel':'s063','yukari':'s088'}[p['role']]
                         p['lastArrival']=dict(station=p['station'],tick=0)
+                        p['lastSighting']=dict(p['lastArrival'])
                         game.deal(room,p)
                         if p['role']=='maribel':
                             edge=next(e for e,to in ADJACENCY['s063'] if to=='s060')
@@ -162,7 +163,7 @@ def main():
                 host.screenshot(path=str(output/'board-ended.png'))
                 host.get_by_role('button',name='行程回放').click()
                 host.wait_for_function("() => document.querySelector('#replay-caption')?.textContent.includes('行程回放')")
-                host.get_by_role('button',name='同组三人再来一局').click()
+                host.get_by_role('button',name='同组玩家再来一局').click()
                 for phone in phones:phone.get_by_role('button',name='已了解，准备出发').wait_for()
                 host.reload();host.locator('.room-code').wait_for()
                 assert round_logs[0].is_file(), 'rematch must preserve the previous round log'

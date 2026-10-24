@@ -23,9 +23,23 @@ try:
 except ImportError:
     qrcode = None
 
+MAX_ACTIVE_ROOMS = 12
+LOBBY_IDLE_TIMEOUT_MS = 30 * 60 * 1000
+
 
 def now_ms():
     return time.monotonic_ns() // 1_000_000
+
+
+def room_is_active(room, now):
+    if room['phase'] == 'ended':
+        return False
+    if room['phase'] != 'lobby':
+        return True
+    # advance() refreshes updated even for unattended lobbies. Count actual
+    # authenticated client heartbeats; zero means not reconnected after restart.
+    last_seen = max([room.get('hostSeen', 0)] + [p.get('seen', 0) for p in room['players']])
+    return last_seen > 0 and now - last_seen < LOBBY_IDLE_TIMEOUT_MS
 
 
 class SaveError(Exception):
@@ -46,12 +60,12 @@ class Store:
                 room.pop(
                     'matchRemaining', None
                 )  # Retire the previous real-time limit in old snapshots.
-                room.setdefault('requests', [])
+                room.pop('requests', None)
                 for i, player in enumerate(room['players']):
                     player.setdefault('seat', i + 1)
-                    player.setdefault('requestUsed', False)
+                    player.pop('requestUsed', None)
                 if room['phase'] not in ('lobby', 'ended'):
-                    game.end(room, 'aborted', '主机服务已重启，本局安全中止。请由主持人重新开局。')
+                    game.end(room, 'aborted', '主机已重启，本局中止。请由主持人重新开局。')
                     if room.get('journal'):
                         room['journal'].update(
                             timeQuality='interrupted',
@@ -361,8 +375,8 @@ class Handler(BaseHTTPRequestHandler):
                     for candidate in store.rooms.values()
                 ):
                     raise ValueError('此房间已经开启后续房间，请刷新主持端。')
-            active = [r for r in store.rooms.values() if r['phase'] != 'ended']
-            if len(active) >= 12:
+            active = [r for r in store.rooms.values() if room_is_active(r, now)]
+            if len(active) >= MAX_ACTIVE_ROOMS:
                 raise ValueError('活动房间过多，请先结束已有房间。')
             while True:
                 code = ''.join(secrets.choice('ABCDEFGHJKLMNPQRSTUVWXYZ23456789') for _ in range(5))

@@ -90,7 +90,10 @@ def main():
                     game.depart(room,renko)
                 phone.locator('.moving-screen').wait_for()
                 assert phone.locator('[data-clock=journey]').inner_text()=='01:00'
-                assert '小时:分钟' in phone.locator('.journey-countdown').inner_text()
+                countdown = phone.locator('.journey-countdown').inner_text()
+                assert '剩余游戏时间（时:分）' in countdown and '预计 第' in countdown, countdown
+                # Night colors on the phone line map follow the atlas route mix.
+                assert phone.locator('.line-map .lm-route').count() == 1
                 phone.screenshot(path=str(output/'phone-moving-night.png'),full_page=True)
                 assert not errors,errors
                 report=dict(status='passed',boundaries=checked,line_colors_match=True,

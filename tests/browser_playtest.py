@@ -223,8 +223,7 @@ class Harness:
         try:
             await phone.locator(f'.axis-stop[data-destination="{best}"]').first.click(timeout=8000)
             await phone.get_by_role('button', name='确认此程').click(timeout=8000)
-            await phone.wait_for_function(
-                "() => document.querySelector('.notice')?.textContent.includes('已收到你的选择')", timeout=15000)
+            await phone.locator('.submitted-ticket').wait_for(timeout=15000)
             return f'{offer.get("name")} → {name_of(best)}'
         except Exception as error:
             await self.check(f'first-leg-{index}', False, error)
@@ -257,7 +256,7 @@ class Harness:
 
     async def rematch(self):
         """Reset to the lobby and hand out fresh identities, tolerating poll lag."""
-        await self.host.get_by_role('button', name='同组三人再来一局').click(timeout=20000)
+        await self.host.get_by_role('button', name='同组玩家再来一局').click(timeout=20000)
         for index, phone in enumerate(self.phones):
             if index == 0:
                 await phone.get_by_role('button', name='已了解，准备出发').wait_for(timeout=25000)
@@ -273,7 +272,7 @@ class Harness:
         await self.host.wait_for_function(
             "() => { const b = document.querySelector('button[data-action=setup]'); return b && !b.disabled; }",
             timeout=25000)
-        await self.host.get_by_role('button', name='开始游戏 · 分配身份').click(timeout=20000)
+        await self.host.get_by_role('button', name='开始游戏并分配身份').click(timeout=20000)
         for phone in self.phones:
             await phone.locator('.identity').wait_for(timeout=25000)
 
@@ -290,8 +289,8 @@ class Harness:
     async def ending_ui(self, prefix):
         """Wait for the结束 screen to actually render, then inspect it."""
         for attempt in range(3):
-            html = await self.host.evaluate("() => document.querySelector('#board-panel')?.innerHTML?.slice(0,60) || ''")
-            if 'ending' in html:
+            # Endings render on the full-width scene stage, not inside the map panel.
+            if await self.host.locator('.ending').count():
                 break
             await self.host.reload()
             try:
@@ -334,8 +333,7 @@ class Harness:
         if not me or not me.get('station'):
             return 'moving'
         if me.get('submitted'):
-            # The UI keeps the axis enabled while the batch is open; a real
-            # player can re-submit, so the bot must not fight the window.
+            # A submitted trip is locked until the batch closes.
             return 'already-submitted'
         here = me['station']
         offer = (me.get('hand') or [{}])[0]
@@ -414,7 +412,7 @@ class Harness:
         return None
 
     async def bot_loop(self):
-        """Keep the three phones responding so no decision window times out."""
+        """Keep the three phones responding; decision windows wait for every choice."""
         while True:
             for index in range(3):
                 try:
@@ -537,7 +535,7 @@ async def main():
                               await h.host.locator('button[data-action=setup]').is_enabled(timeout=15000))
                 await h.shot(host, 'r1-lobby-1920')
                 await h.shot(phones[0], 'r1-lobby-phone')
-                await host.get_by_role('button', name='开始游戏 · 分配身份').click()
+                await host.get_by_role('button', name='开始游戏并分配身份').click()
                 for phone in phones:
                     await phone.locator('.identity').wait_for(timeout=20000)
                 roles = await h.roles()
@@ -669,8 +667,14 @@ async def main():
                 if moving is not None:
                     phone = phones[moving]
                     await phone.wait_for_timeout(600)   # let the repaint settle
-                    stale = await phone.locator('.identity,.goal,.drawn-line,.phone-public').count()
-                    await h.check('moving phone hides the route picker and public arrival list', stale == 0, stale)
+                    stale = await phone.locator('.identity,.goal,.drawn-line').count()
+                    await h.check('moving phone hides the route picker', stale == 0, stale)
+                    await h.check('moving phone keeps the public record collapsed',
+                                  await phone.locator('#phone-public').count() == 1 and
+                                  await phone.locator('#phone-public[open]').count() == 0)
+                    await h.check('moving phone shows its whole line with its own position',
+                                  await phone.locator('.line-map .lm-route').count() >= 1 and
+                                  await phone.locator('.line-map .lm-you').count() == 1)
                     await h.check('moving phone keeps only a collapsed private notebook',
                                   await phone.locator('.private-notebook').count() == 1 and
                                   await phone.locator('#private-notebook[open]').count() == 0)
@@ -692,9 +696,9 @@ async def main():
                     else:
                         await h.check('moving view renders its arrival countdown', bool(samples),
                                       f'{len(samples)} samples')
-                # A live driver keeps answering the 30 s decision windows, which is
-                # what a real table does; without it every batch times out and the
-                # railway clock never advances.
+                # A live driver keeps answering the decision windows, which is what
+                # a real table does; batches never time out, so without it the
+                # railway clock would stay paused.
                 bot = asyncio.create_task(h.bot_loop())
                 # Real-clock rate, measured against the server's own wall clock so
                 # the (slow) browser round trips are excluded. Only counted while
@@ -814,11 +818,14 @@ async def main():
                 await h.wait_for_launch()
                 await host.get_by_role('button', name='正式发车').click()
                 # Place the fixture only once the match is running, so the briefing
-                # window cannot expire underneath it.
+                # choices cannot overwrite it.
                 with server.store.lock:
                     room = server.store.rooms[h.code]
                     roles = {p['role']: p for p in room['players']}
-                    hub = roles['yukari']['station'] or roles['maribel']['station']
+                    # Everyone departs at launch, so park Yukari at her last stop.
+                    hub = roles['yukari']['station'] or roles['yukari']['lastArrival']['station']
+                    roles['yukari'].update(station=hub, trip=None, queued=None, departAt=None,
+                                           waitUntil=room['tick'] + 10, holdUntil=0)
                     # Only Marin-bel joins Yukari at first: with Renko also there,
                     # the Hifuu meeting would resolve before any corruption.
                     away = next((to for _, to in ADJACENCY[hub]
@@ -831,6 +838,9 @@ async def main():
                     roles['renko'].update(station=away, trip=None, queued=None, departAt=None,
                                           waitUntil=room['tick'] + 10, holdUntil=0,
                                           lastArrival=dict(station=away, tick=room['tick']))
+                    # A teleported traveler needs a line drawn at the new station.
+                    for role in ('yukari', 'maribel', 'renko'):
+                        game.deal(room, roles[role])
                     room['tickMs'] = 400
                     room['revision'] += 1
                 log(f'  Marin-bel placed with Yukari at {name_of(hub)}; Renko held at {name_of(away)}')
@@ -855,9 +865,15 @@ async def main():
                                   await phones[maribel_index].locator('.current-private-state, .goal').count() >= 1)
                     await h.shot(phones[maribel_index], 'r4-phone-corrupted', full_page=True)
                     with server.store.lock:
+                        # Yukari leaves first; meeting her directly would be the
+                        # plain capture ending instead of the corrupted variant.
+                        roles['yukari'].update(station=away, waitUntil=room['tick'] + 10,
+                                               lastArrival=dict(station=away, tick=room['tick']))
                         roles['renko'].update(station=hub, trip=None, queued=None, departAt=None,
                                               waitUntil=0, holdUntil=0,
                                               lastArrival=dict(station=hub, tick=room['tick']))
+                        for role in ('yukari', 'renko'):
+                            game.deal(room, roles[role])
                         room['revision'] += 1
                     try:
                         await host.wait_for_function("() => document.querySelector('.ending')", timeout=25000)
@@ -877,16 +893,16 @@ async def main():
                 # ---------- Round 5: change group / brand-new room ----------
                 log('ROUND 5: new room for a different group')
                 try:
-                    await host.get_by_role('button', name='换组 · 新房间').click(timeout=15000)
+                    await host.get_by_role('button', name='创建新房间').click(timeout=15000)
                     await host.locator('.room-code').wait_for(timeout=15000)
                     new_code = (await host.locator('.room-code').inner_text()).strip()
                     await h.check('a brand-new room gets a different code',
                                   new_code != h.code and len(new_code) == 5, f'{h.code} -> {new_code}')
                     await h.check('the new room starts empty',
-                                  '已加入 0/3 人' in (await host.locator('#host-start-status').inner_text()),
+                                  '已加入 0/6 人' in (await host.locator('#host-start-status').inner_text()),
                                   await host.locator('#host-start-status').inner_text())
-                    await h.check('the old seats no longer hold this room',
-                                  (await h.api(f'/api/state?room={new_code}', h.tokens[0]))['status'] == 404)
+                    old_seat = (await h.api(f'/api/state?room={new_code}', h.tokens[0]))['status']
+                    await h.check('the old seats no longer hold this room', old_seat == 401, old_seat)
                     REPORT['rounds'].append(dict(label='r5-new-room', code=new_code))
                 except Exception as error:
                     await h.check('a brand-new room can be created from the ended board', False, error)
@@ -906,6 +922,8 @@ async def main():
     for entry in REPORT['checks']:
         if not entry['ok']:
             log(f"  {'note' if entry.get('advisory') else '!!'} {entry['name']}: {entry['detail']}")
+    if REPORT['failedCount'] or REPORT['problems']:
+        sys.exit(1)
 
 
 if __name__ == '__main__':

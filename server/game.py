@@ -18,6 +18,11 @@ DIALOGUE_START_TICK = DIALOGUE_RULES[
 ]  # Day 2 00:00; the journey starts at day 1 16:00.
 DISCONNECT_TIMEOUT_MS = 90000
 AUTO_CONTINUE_MS = 3000
+HAT_DURATION_TICKS = 8
+HAT_COOLDOWN_TICKS = 4
+HAT_USES = 2
+HAT_SWAP_PROBABILITY = 0.5
+MAX_PLAYERS = 6
 
 
 class StaleAction(ValueError):
@@ -44,6 +49,7 @@ def shuffled(room, values, key):
 def create_room(code, now):
     return dict(
         code=code,
+        rulesVersion='2026-10-05-encounters',
         hostToken=secrets.token_hex(24),
         seed=secrets.token_hex(24),
         phase='lobby',
@@ -55,7 +61,6 @@ def create_room(code, now):
         revision=0,
         events=[],
         arrivals=[],
-        requests=[],
         serial=0,
         railAccum=0,
         tickMs=RULES['tick_ms'],
@@ -68,6 +73,11 @@ def create_room(code, now):
         dialogueEnabled=False,
         dialogueProgress={},
         dialogues=[],
+        hat=None,
+        brownMeetings=[],
+        mapLabelSerial=0,
+        hatContacts=[],
+        brownAnonymous=False,
         journal=journal.new_clock(),
     )
 
@@ -170,14 +180,14 @@ def note(room, player, text):
 
 
 def join(room, name, now):
-    if room['phase'] != 'lobby' or len(room['players']) >= 3:
+    if room['phase'] != 'lobby' or len(room['players']) >= MAX_PLAYERS:
         raise ValueError('房间已锁定或已满，请观看大屏。')
     name = str(name or '').strip()[:12]
     if not name:
         raise ValueError('请填写旅人昵称。')
     seat = next(
         n
-        for n in (1, 2, 3)
+        for n in range(1, MAX_PLAYERS + 1)
         if n not in {p.get('seat', i + 1) for i, p in enumerate(room['players'])}
     )
     player = dict(
@@ -189,7 +199,6 @@ def join(room, name, now):
         ready=False,
         messages=[],
         lastSeq=0,
-        requestUsed=False,
     )
     room['players'].append(player)
     room['revision'] += 1
@@ -255,7 +264,7 @@ def deal(room, player):
     player['hand'] = [line_offer(line, player['station'], key)]
 
 
-def open_decision(room, players, initial=False):
+def open_decision(room, players, initial=False, encounter=None):
     room['serial'] += 1
     room['decision'] = dict(
         id=room['serial'],
@@ -263,7 +272,7 @@ def open_decision(room, players, initial=False):
         choices={},
         remaining=None,
         initial=initial,
-        request=None,
+        encounter=encounter,
         hostPaused=False,
     )
     if not initial:
@@ -275,16 +284,17 @@ def open_decision(room, players, initial=False):
         batch=room['decision']['id'],
         initial=initial,
         required=[p['id'] for p in players],
+        encounter=encounter['id'] if encounter else None,
     )
 
 
 def setup(room, template, now):
     if (
         room['phase'] != 'lobby'
-        or len(room['players']) != 3
+        or not 3 <= len(room['players']) <= MAX_PLAYERS
         or any(not p['ready'] or now - p['seen'] >= HEARTBEAT_TIMEOUT_MS for p in room['players'])
     ):
-        raise ValueError('需要三名已连接且准备好的玩家。')
+        raise ValueError('需要3–6名已连接且准备好的玩家。')
     chosen = (
         shuffled(room, TEMPLATES, 'template')[0]
         if template == 'random'
@@ -296,15 +306,35 @@ def setup(room, template, now):
     if not room.get('journal'):
         room['journal'] = journal.new_clock()
     journal.start(room)
-    roles = shuffled(room, ['renko', 'maribel', 'yukari'], 'roles')
+    roles = shuffled(
+        room, ['renko', 'maribel', 'yukari'] + ['sumireko'] * (len(room['players']) - 3), 'roles'
+    )
     starts = shuffled(room, [chosen[f'station_{c}_id'] for c in 'abc'], 'starts')
+    primary_starts = dict(zip(('renko', 'maribel', 'yukari'), starts))
+    nearby = {primary_starts['renko']}
+    for _ in range(2):
+        nearby |= {
+            to for node in tuple(nearby) for edge, to in ADJACENCY[node] if not edge['special']
+        }
+    available = set(ADJACENCY) - set(starts)
+    extra_starts = shuffled(room, sorted(available & nearby), 'nearby-starts')[:1]
+    extra_starts += shuffled(room, sorted(available - set(extra_starts)), 'extra-starts')
+    extra_index = 0
     room['template'] = chosen['template_id']
     for i, p in enumerate(room['players']):
+        start = primary_starts.get(roles[i])
+        if start is None:
+            start = extra_starts[extra_index]
+            extra_index += 1
         p.update(
             role=roles[i],
             corrupted=False,
-            station=starts[i],
-            lastArrival=dict(station=starts[i], tick=0),
+            station=start,
+            lastArrival=dict(station=start, tick=0),
+            lastSighting=dict(station=start, tick=0),
+            mapToken=secrets.token_hex(12),
+            hatEligible=True,
+            winEligible=True,
             trip=None,
             queued=None,
             departAt=None,
@@ -317,10 +347,16 @@ def setup(room, template, now):
             hand=[],
             deal=0,
             actionVersion=0,
-            requestUsed=False,
         )
         deal(room, p)
         log(room, 'start', player=p['id'], station=p['station'], role=p['role'])
+    relabel(room, [p for p in room['players'] if appearance(p) == 'brown'])
+    room['hat'] = dict(
+        holder=by_role(room)['renko']['id'],
+        until=None,
+        cooldownUntil=0,
+        usesLeft=HAT_USES,
+    )
     room['phase'], room['updated'] = 'briefing', now
     open_decision(room, room['players'], initial=True)
 
@@ -329,7 +365,7 @@ def launch(room, now, force=False):
     if room['phase'] != 'briefing':
         raise ValueError('当前不能发车。')
     if any(now - p['seen'] >= HEARTBEAT_TIMEOUT_MS for p in room['players']):
-        raise ValueError('请等待三名玩家恢复连接。')
+        raise ValueError('请等待所有玩家恢复连接。')
     fill_missing_choices(room, force)
     room['updated'] = now
     if room.get('journal'):
@@ -350,6 +386,8 @@ def continue_decision(room, force=False):
 
 def fill_missing_choices(room, force):
     batch = room['decision']
+    if pending_encounter(batch):
+        raise ValueError('请等待相遇的玩家确认结果，主持人不能跳过确认。')
     missing = [pid for pid in batch['required'] if str(pid) not in batch['choices']]
     if missing and not force:
         raise ValueError('请等待所有需要选路的玩家确认，或选择未确认者留站并继续。')
@@ -358,9 +396,21 @@ def fill_missing_choices(room, force):
             batch['choices'][str(pid)] = dict(kind='wait', automatic=True, hostForced=True)
             p = next(p for p in room['players'] if p['id'] == pid)
             log_choice(room, p, batch['choices'][str(pid)], source='host')
-        if batch.get('request') and batch['request'].get('status') == 'pending':
-            batch['request']['status'] = 'expired'
     return missing
+
+
+def pending_encounter(batch):
+    encounter = batch.get('encounter') if batch else None
+    return set(encounter['participants']) - set(encounter['confirmed']) if encounter else set()
+
+
+def decision_pending(batch):
+    if not batch:
+        return set(), set()
+    encounter = batch.get('encounter')
+    required = set(batch['required']) | set(encounter['participants'] if encounter else [])
+    pending = {pid for pid in batch['required'] if str(pid) not in batch['choices']}
+    return required, pending | pending_encounter(batch)
 
 
 def schedule_continue(room):
@@ -371,13 +421,14 @@ def schedule_continue(room):
         and not batch.get('hostPaused')
         and batch['remaining'] is None
         and all(str(pid) in batch['choices'] for pid in batch['required'])
+        and not pending_encounter(batch)
     ):
         batch['remaining'] = AUTO_CONTINUE_MS
 
 
 def pause_decision(room, paused):
     if room['phase'] != 'decision' or type(paused) is not bool:
-        raise ValueError('只能暂停或恢复当前停站讨论。')
+        raise ValueError('只能暂停或恢复当前确认阶段。')
     batch = room['decision']
     batch['hostPaused'] = paused
     batch['remaining'] = None
@@ -420,57 +471,22 @@ def action(room, p, command):
     ):
         raise StaleAction('行动窗口已更新，请使用最新行程。')
     kind = command.get('kind')
-    if kind == 'request_wait':
+    if kind == 'confirm_encounter':
         batch = room['decision']
-        if room['phase'] != 'decision' or not batch or batch.get('initial'):
-            raise ValueError('只有到站讨论时才能发起请求。')
-        if batch.get('request'):
-            raise ValueError('本轮已经有一项请求。')
-        if p.get('requestUsed'):
-            raise ValueError('本局的请求机会已经用过。')
-        target_id = command.get('target')
-        if type(target_id) is not int or target_id == p['id'] or target_id not in batch['required']:
-            raise ValueError('请选择本轮仍待确认的另一名玩家。')
-        if str(target_id) in batch['choices']:
-            raise ValueError('该玩家已经确认，不能再请求留站。')
-        room['serial'] += 1
-        request = dict(
-            id=room['serial'],
-            tick=room['tick'],
-            requester=p['id'],
-            target=target_id,
-            status='pending',
-        )
-        batch['request'] = request
-        room['requests'].append(request)
-        room['requests'] = room['requests'][-24:]
-        p['requestUsed'] = True
-        p['lastSeq'] = seq
-        room['revision'] += 1
-        log(room, 'request_wait', request=request['id'], player=p['id'], target=target_id)
-        return
-    if kind == 'respond_request':
-        batch = room['decision']
-        request = batch.get('request') if batch else None
+        encounter = batch.get('encounter') if batch else None
         if (
             room['phase'] != 'decision'
-            or not request
-            or request.get('status') != 'pending'
-            or request.get('target') != p['id']
+            or not encounter
+            or p['id'] not in encounter['participants']
+            or type(command.get('encounter')) is not int
+            or command['encounter'] != encounter['id']
         ):
-            raise ValueError('当前没有需要你回应的留站请求。')
-        if str(p['id']) in batch['choices']:
-            raise ValueError('你已经确认了本轮行动。')
-        accepted = command.get('accept')
-        if type(accepted) is not bool:
-            raise ValueError('请选择接受或拒绝。')
-        request['status'] = 'accepted' if accepted else 'declined'
-        if accepted:
-            batch['choices'][str(p['id'])] = dict(kind='wait', request=request['id'])
-            log_choice(room, p, batch['choices'][str(p['id'])], source='request')
+            raise ValueError('当前没有需要你确认的相遇结果。')
         p['lastSeq'] = seq
-        room['revision'] += 1
-        log(room, 'request_response', request=request['id'], player=p['id'], accepted=accepted)
+        if p['id'] not in encounter['confirmed']:
+            encounter['confirmed'].append(p['id'])
+            room['revision'] += 1
+            log(room, 'encounter_confirm', player=p['id'], encounter=encounter['id'])
         schedule_continue(room)
         return
     if kind == 'stop':
@@ -579,6 +595,8 @@ def apply_choice(room, p, choice, next_boundary=False):
 
 def finish_decision(room, trigger='host'):
     batch = room['decision']
+    if pending_encounter(batch):
+        raise ValueError('请等待相遇的玩家确认结果。')
     for p in room['players']:
         choice = batch['choices'].get(
             str(p['id']), dict(kind='wait') if p['id'] in batch['required'] else None
@@ -608,6 +626,220 @@ def depart(room, p):
         edge=trip['card']['edges'][trip['segment']],
     )
     p['station'], p['departAt'] = None, None
+    # Leaving ends the continuous encounter even when two players travel together.
+    if p.get('role') == 'renko':
+        room['hatContacts'] = []
+    elif p.get('role') == 'sumireko':
+        room['hatContacts'] = [pair for pair in room.get('hatContacts', []) if pair[1] != p['id']]
+
+
+def appearance(player):
+    return 'brown' if player.get('role') in ('renko', 'sumireko') else 'purple'
+
+
+# Letters only: digits would read as seats, and I/O resemble 1/0.
+MAP_LABELS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+
+
+def relabel(room, players):
+    """Give brown travelers fresh public letters, never one another marker still shows.
+
+    Letters follow the random map tokens, so neither seat order nor the old
+    letter predicts who receives which new letter.
+    """
+    fresh = {p['id'] for p in players}
+    used = {p.get('mapLabel') for p in room['players'] if p['id'] not in fresh}
+    for p in sorted(players, key=lambda p: p['mapToken']):
+        while True:
+            serial = room.get('mapLabelSerial', 0)
+            room['mapLabelSerial'] = serial + 1
+            label = MAP_LABELS[serial % len(MAP_LABELS)]
+            if label not in used:
+                break
+        used.add(label)
+        p['mapLabel'] = label
+
+
+def update_sightings(room, entries):
+    """Break public identity continuity on real meetings, even without a hat swap.
+
+    A shared timestamp prevents the old waiter's observation age identifying
+    the arriving Renko after anonymous tokens have been rotated.
+    """
+    positions = {p['id']: p.get('station') for p in room['players']}
+    for entry in entries:
+        p = entry['player']
+        positions[p['id']] = entry['station']
+        p['lastSighting'] = dict(station=entry['station'], tick=room['tick'])
+    groups = {}
+    for p in room['players']:
+        if appearance(p) == 'brown' and positions[p['id']]:
+            groups.setdefault(positions[p['id']], []).append(p)
+    meetings = []
+    for station, players in groups.items():
+        if len(players) < 2:
+            continue
+        signature = [station, sorted(p['id'] for p in players)]
+        meetings.append(signature)
+        if signature not in room.get('brownMeetings', []):
+            for p in players:
+                p['mapToken'] = secrets.token_hex(12)
+                p['lastSighting'] = dict(station=station, tick=room['tick'])
+            relabel(room, players)
+    room['brownMeetings'] = meetings
+
+
+def return_hat(room):
+    hat = room.get('hat')
+    if not hat or hat['until'] is None:
+        return
+    renko = by_role(room)['renko']
+    wearer = next(p for p in room['players'] if p['id'] == hat['holder'])
+    hat.update(holder=renko['id'], until=None, cooldownUntil=room['tick'] + HAT_COOLDOWN_TICKS)
+    for p in (renko, wearer):
+        note(room, p, '帽子已归还。')
+    log(room, 'hat_return', player=wearer['id'], to=renko['id'])
+
+
+def resolve_contacts(room):
+    """Both purple roles seal loans; only Yukari counts toward catching the whole group."""
+    roles = by_role(room)
+    for p in room['players']:
+        if p.get('role') != 'sumireko' or not p.get('station'):
+            continue
+        contacts = [
+            roles[role] for role in ('maribel', 'yukari') if roles[role]['station'] == p['station']
+        ]
+        for other in contacts:
+            before = (p.get('hatEligible', True), p.get('winEligible', True))
+            p['hatEligible'] = False
+            if other['role'] == 'yukari':
+                p['winEligible'] = False
+            if before != (p['hatEligible'], p.get('winEligible', True)):
+                log(
+                    room,
+                    'sumireko_contact',
+                    player=p['id'],
+                    by=other['id'],
+                    station=p['station'],
+                    caughtByYukari=not p.get('winEligible', True),
+                )
+        if contacts and room.get('hat') and room['hat']['holder'] == p['id']:
+            return_hat(room)
+
+
+def resolve_hat(room, entries):
+    """Draw once per fresh Renko/Sumireko contact, including unsuccessful encounters."""
+    hat = room.get('hat')
+    if not hat or room['result']:
+        return None
+    if hat['until'] is not None and room['tick'] >= hat['until']:
+        return_hat(room)
+    renko = by_role(room)['renko']
+    # Entry positions include passing a node without turning it into a real stop.
+    positions = {p['id']: p.get('station') for p in room['players']}
+    positions.update({e['player']['id']: e['station'] for e in entries})
+    station = positions[renko['id']]
+    contacts = [
+        p
+        for p in room['players']
+        if p['role'] == 'sumireko' and station and positions[p['id']] == station
+    ]
+    previous = room.get('hatContacts', [])
+    fresh = [p for p in contacts if [station, p['id']] not in previous]
+    room['hatContacts'] = [[station, p['id']] for p in contacts]
+    if not fresh:
+        return None
+    # The first contact ends public brown seats for good, whether or not the hat moves.
+    room['brownAnonymous'] = True
+    room['serial'] += 1
+    event_id = room['serial']
+    # Select before checking secret eligibility; no retry with another candidate.
+    target = shuffled(room, fresh, f'contact-target:{event_id}')[0]
+    roll = random_value(room, f'contact-swap:{event_id}')
+    changed = bool(
+        hat['holder'] == renko['id']
+        and hat['cooldownUntil'] <= room['tick']
+        and hat['usesLeft'] > 0
+        and target.get('hatEligible', True)
+        and roll < HAT_SWAP_PROBABILITY
+    )
+    encounter = dict(
+        id=event_id,
+        tick=room['tick'],
+        participants=[renko['id']] + [p['id'] for p in contacts],
+        target=target['id'],
+        changed=changed,
+        confirmed=[],
+    )
+    log(
+        room,
+        'hat_encounter',
+        encounter=event_id,
+        station=station,
+        participants=encounter['participants'],
+        target=target['id'],
+        changed=changed,
+        value=roll,
+    )
+    if changed:
+        hat.update(
+            holder=target['id'],
+            until=room['tick'] + HAT_DURATION_TICKS,
+            usesLeft=hat['usesLeft'] - 1,
+        )
+    # Both outcomes consume the same event slots: public decision/arrival IDs
+    # must not encode whether the private transfer succeeded.
+    log(
+        room,
+        'hat_transfer' if changed else 'hat_unchanged',
+        player=renko['id'],
+        to=target['id'],
+        until=hat['until'] if changed else None,
+    )
+    for p in [renko] + contacts:
+        success = changed and p['id'] in (renko['id'], target['id'])
+        note(room, p, '换帽成功。' if success else '本次未发生换帽。')
+    return encounter
+
+
+def public_markers(room):
+    markers = []
+    hat = room.get('hat')
+    for p in room['players']:
+        seen = p.get('lastSighting', p.get('lastArrival'))
+        if not seen:
+            continue
+        brown = appearance(p) == 'brown'
+        marker = dict(
+            id=p.get('mapToken', f"legacy-{p['id']}") if brown else f"purple-{p['id']}",
+            appearance=appearance(p),
+            lastArrival=copy.deepcopy(seen),
+            hat=bool(hat and hat['holder'] == p['id']),
+        )
+        if not brown:
+            marker.update(seat=p['seat'])
+        elif not room.get('brownAnonymous'):
+            # Before Renko first meets a Sumireko, each brown letter names its seat.
+            marker.update(label=p.get('mapLabel', ''), seat=p['seat'])
+        markers.append(marker)
+    return sorted(markers, key=lambda m: m['id'])
+
+
+def public_arrivals(room):
+    """Historical brown sightings never inherit today's token or real seat."""
+    players = {p['id']: p for p in room['players']}
+    records = {}
+    for event in room['arrivals']:
+        p = players[event['player']]
+        if appearance(p) == 'purple':
+            item = dict(event, appearance='purple')
+            key = f"purple:{p['id']}:{event['station']}:{event['tick']}"
+        else:
+            key = f"brown:{event['station']}:{event['tick']}"
+            item = dict(station=event['station'], tick=event['tick'], appearance='brown')
+        records[key] = dict(item, id=key)
+    return list(records.values())[-16:]
 
 
 def end(room, outcome, reason, station=None):
@@ -616,19 +848,32 @@ def end(room, outcome, reason, station=None):
     if room.get('journal'):
         room['journal']['endedAt'] = journal.timestamp(room)
     room['result'] = dict(outcome=outcome, reason=reason, station=station, tick=room['tick'])
+    extras = [p for p in room['players'] if p.get('role') == 'sumireko']
+    remaining = sum(p.get('winEligible', True) for p in extras)
+    group_won = outcome == 'hifuu' and remaining > 0
+    room['result']['sumireko'] = dict(won=group_won, total=len(extras), remaining=remaining)
+    room['result']['individuals'] = [
+        dict(
+            player=p['id'],
+            won=group_won,
+            eligible=p.get('winEligible', True),
+            hatEligible=p.get('hatEligible', True),
+        )
+        for p in extras
+    ]
     room['phase'], room['decision'], room['technical'] = 'ended', None, None
     log(room, 'end', outcome=outcome, reason=reason, station=station)
 
 
 def by_role(room):
-    return {p['role']: p for p in room['players']}
+    return {p['role']: p for p in room['players'] if p['role'] != 'sumireko'}
 
 
 def terminal_meeting(room):
     roles = by_role(room)
     r, m, y = (roles[k] for k in ('renko', 'maribel', 'yukari'))
     if r['station'] and r['station'] == m['station'] and not m['corrupted']:
-        end(room, 'hifuu', '这一次，站台上等着你的，确实是她。', r['station'])
+        end(room, 'hifuu', '梅莉在站台上等你。', r['station'])
     elif r['station'] and (
         r['station'] == y['station'] or (m['corrupted'] and r['station'] == m['station'])
     ):
@@ -718,7 +963,7 @@ def resolve_events(room, entries, roller=None):
 
 def rail_step(room):
     """Settle one 15-minute interval, then arrivals, station events, and decisions."""
-    if room['result']:
+    if room['result'] or room['phase'] != 'running' or room.get('technical'):
         return
     waiting = [
         player
@@ -738,7 +983,7 @@ def rail_step(room):
         p['trip']['remaining'] -= 1
     room['tick'] += 1
     if room['tick'] > JOURNEY_LIMIT_TICKS:
-        end(room, 'draw', '旅程已超过48小时。列车驶过约定的时刻，你们终究未能相逢。')
+        end(room, 'draw', '旅程已超过48小时，你们没能会合。')
         return
     for p in room['players']:
         if (
@@ -787,17 +1032,20 @@ def rail_step(room):
             trip['remaining'] = trip['card']['segments'][trip['segment']]
             if stop:
                 p['departAt'] = room['tick'] + 1
+    update_sightings(room, entries)
+    resolve_contacts(room)
     terminal_meeting(room)
     if room['result']:
         return
     resolve_events(room, entries)
+    encounter = resolve_hat(room, entries)
     for player in waiting:
         deal(room, player)
         player['actionVersion'] += 1
         terminals.append(player)
         log(room, 'wait_expired', player=player['id'], station=player['station'])
-    if terminals:
-        open_decision(room, terminals)
+    if terminals or encounter:
+        open_decision(room, terminals, encounter=encounter)
     room['revision'] += 1
 
 
@@ -877,29 +1125,11 @@ def advance(room, now):
             break
 
 
-def public_request(room, request):
-    if not request:
-        return None
-    players = {p['id']: p for p in room['players']}
-    requester, target = players.get(request.get('requester')), players.get(request.get('target'))
-    if not requester or not target:
-        return None
-    return dict(
-        id=request['id'],
-        tick=request['tick'],
-        requester=requester['id'],
-        requesterSeat=requester['seat'],
-        requesterName=requester['name'],
-        target=target['id'],
-        targetSeat=target['seat'],
-        targetName=target['name'],
-        status=request.get('status', 'pending'),
-    )
-
-
 def public_state(room, now):
     """Build an explicit public projection; hidden player fields never enter it."""
     done = room['phase'] == 'ended'
+    batch = room.get('decision')
+    required, pending = decision_pending(batch)
     state = dict(
         code=room['code'],
         phase=room['phase'],
@@ -908,33 +1138,36 @@ def public_state(room, now):
         decisionRemaining=room['decision']['remaining'] if room['decision'] else None,
         decisionPaused=bool(room['decision'] and room['decision'].get('hostPaused')),
         technical=None,
-        readyCount=len(room['decision']['choices']) if room['decision'] else 0,
+        readyCount=len(required - pending),
         players=[],
-        arrivals=room['arrivals'][-16:],
-        requests=[],
-        request=None,
+        arrivals=copy.deepcopy(room['arrivals'][-16:]) if done else public_arrivals(room),
+        markers=public_markers(room),
+        maxPlayers=MAX_PLAYERS,
         result=room['result'],
     )
     state['dialogueEnabled'] = room.get('dialogueEnabled', False)
     state['publicDialogues'] = public_dialogues(room, done)
-    state['requests'] = [
-        item
-        for item in (public_request(room, request) for request in room.get('requests', [])[-12:])
-        if item
-    ]
-    state['request'] = (
-        public_request(room, room['decision'].get('request')) if room.get('decision') else None
-    )
     state['autoWaitCount'] = (
         sum(bool(c.get('automatic')) for c in room['decision']['choices'].values())
         if room['decision']
         else 0
     )
     state['joinAddress'] = room.get('joinAddress')
-    state['pendingPlayers'] = (
-        [pid for pid in room['decision']['required'] if str(pid) not in room['decision']['choices']]
-        if room['decision']
-        else []
+    state['pendingCount'] = len(pending)
+    # Name only seats the map already shows: purple always, brown until the first
+    # Renko/Sumireko contact. Encounter confirmations stay inside the bare count.
+    players = {p['id']: p for p in room['players']}
+    state['pendingSeats'] = sorted(
+        players[pid]['seat']
+        for pid in (batch['required'] if batch else [])
+        if str(pid) not in batch['choices']
+        and (appearance(players[pid]) == 'purple' or not room.get('brownAnonymous'))
+    )
+    state['canForceContinue'] = bool(
+        batch
+        and any(str(pid) not in batch['choices'] for pid in batch['required'])
+        and not pending_encounter(batch)
+        and not room['technical']
     )
     if room['technical']:
         resume = room['technical']['resumeAt']
@@ -950,8 +1183,9 @@ def public_state(room, now):
             connected=now - p['seen'] < HEARTBEAT_TIMEOUT_MS,
             ready=p['ready'],
             role=p.get('role') if done or p.get('role') == 'renko' else None,
+            appearance=appearance(p) if p.get('role') else None,
         )
-        if p.get('lastArrival'):
+        if done and p.get('lastArrival'):
             item['lastArrival'] = copy.deepcopy(p['lastArrival'])
         if done:
             item['corrupted'] = p.get('corrupted', False)
@@ -961,7 +1195,20 @@ def public_state(room, now):
             [
                 e
                 for e in room['events']
-                if e['type'] in ('start', 'depart', 'arrival', 'pass', 'corruption', 'end')
+                if e['type']
+                in (
+                    'start',
+                    'depart',
+                    'arrival',
+                    'pass',
+                    'corruption',
+                    'end',
+                    'hat_transfer',
+                    'hat_return',
+                    'sumireko_contact',
+                    'hat_encounter',
+                    'encounter_confirm',
+                )
             ]
         )
     return state
@@ -1029,11 +1276,20 @@ def private_state(room, p, now):
             'hand',
             'messages',
             'lastSeq',
-            'requestUsed',
         )
     }
     batch = room['decision']
     choice = batch['choices'].get(str(p['id'])) if batch else None
+    encounter = batch.get('encounter') if batch else None
+    if encounter and p['id'] in encounter['participants']:
+        me['encounter'] = dict(
+            id=encounter['id'],
+            tick=encounter['tick'],
+            changed=bool(
+                encounter['changed'] and (p['role'] == 'renko' or p['id'] == encounter['target'])
+            ),
+            confirmed=p['id'] in encounter['confirmed'],
+        )
     me.update(
         seat=next(x['seat'] for x in state['players'] if x['id'] == p['id']),
         autoWait=bool(choice and choice.get('automatic')),
@@ -1042,18 +1298,6 @@ def private_state(room, p, now):
         submitted=bool(choice),
         chosen=(choice.get('card', {}).get('id') or 'wait') if choice else None,
         chosenDestination=choice['card']['nodes'][-1] if choice and choice.get('card') else None,
-        requestAvailable=bool(
-            batch
-            and not batch.get('initial')
-            and not p.get('requestUsed')
-            and not batch.get('request')
-        ),
-        requestTarget=bool(
-            batch
-            and batch.get('request')
-            and batch['request'].get('target') == p['id']
-            and batch['request'].get('status') == 'pending'
-        ),
         canAct=not room['technical']
         and room['phase'] in ('briefing', 'running', 'decision')
         and can_act(room, p),
@@ -1071,6 +1315,18 @@ def private_state(room, p, now):
         ),
     )
     me['motion'] = travel_status(room, p)
+    if p.get('role') == 'maribel':
+        me['renkoLastArrival'] = copy.deepcopy(by_role(room)['renko']['lastArrival'])
+    hat = room.get('hat')
+    if hat and p.get('role') == 'renko':
+        me['hat'] = dict(
+            holder=hat['holder'],
+            until=hat['until'],
+            cooldownUntil=hat['cooldownUntil'],
+            usesLeft=hat['usesLeft'],
+        )
+    elif hat and p.get('role') == 'sumireko' and hat['holder'] == p['id']:
+        me['hat'] = dict(until=hat['until'])
     me['otherPlayersDeciding'] = room['phase'] == 'decision' and p['id'] not in batch['required']
     me['availableLines'] = []
     if p.get('station') and not p.get('trip'):

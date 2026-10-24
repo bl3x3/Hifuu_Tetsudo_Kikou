@@ -7,6 +7,24 @@
     "night": "/assets/window-night.webp",
     "paper": "/assets/paper.webp"
   },
-  "roles": { "unknown": "/assets/avatar-unknown.webp", "renko": "/assets/avatar-renko.webp", "maribel": "/assets/avatar-maribel.webp", "yukari": "/assets/avatar-yukari.webp" },
-  "endings": { "hifuu": "/assets/ending-hifuu.webp", "yukari_direct": "/assets/ending-yukari.webp", "yukari_corrupted": "/assets/ending-yukari.webp", "draw": "/assets/ending-timeout.webp", "aborted": "/assets/journey-aborted.webp" }
+  "roles": {
+    "unknown": "/assets/avatar-unknown.webp",
+    "renko": "/assets/avatar-renko.webp",
+    "maribel": "/assets/avatar-maribel.webp",
+    "yukari": "/assets/avatar-yukari.webp",
+    "sumireko": "/assets/avatar-sumireko.webp"
+  },
+  "appearance": {
+    "brown": "/assets/avatar-brown.webp",
+    "purple": "/assets/avatar-unknown.webp",
+    "hat": "/assets/hat.webp"
+  },
+  "endings": {
+    "hifuu": "/assets/ending-hifuu.webp",
+    "yukari_direct": "/assets/ending-yukari.webp",
+    "yukari_corrupted": "/assets/ending-yukari.webp",
+    "draw": "/assets/ending-timeout.webp",
+    "aborted": "/assets/journey-aborted.webp",
+    "sumireko_loss": "/assets/ending-sumireko-loss.webp"
+  }
 }

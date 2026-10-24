@@ -72,12 +72,25 @@ def main():
                     expect(phone.locator('#change-edge option').first).to_contain_text('↔')
                     phone.screenshot(path=str(out/f'change-{width}.png'))
                     phones.append(phone)
-                # Pills remain centred on the public station and never add leader lines.
+                # Pills remain centred on the public station and never add leader lines;
+                # the station's own name plate moves aside instead.
                 with server.store.lock:
-                    for player in room['players'][:2]:player['lastArrival']=dict(station='s049',tick=0)
+                    for player in room['players'][:2]:
+                        player['lastArrival']=player['lastSighting']=dict(station='s049',tick=0)
+                    room['revision']+=1
                 screen.wait_for_function('()=>document.querySelectorAll(".station-player-pill[data-station=s049] .player-marker").length===2')
                 pill=screen.locator('.station-player-pill[data-station=s049]')
-                assert pill.locator('path').count()==0
+                assert pill.locator('line, path:not(.hat-fallback)').count()==0
+                # Measure the pill and badges; portrait images overflow their clipped frames.
+                label_clear=screen.evaluate('''() => {
+                    const group=document.querySelector('.station-player-pill[data-station=s049]');
+                    const plate=document.querySelector('#network #s049 rect.station-label').getBoundingClientRect();
+                    return [...group.querySelectorAll(':scope > rect, .marker-tag rect')].every(e => {
+                        const box=e.getBoundingClientRect();
+                        return plate.right<=box.left||plate.left>=box.right||plate.bottom<=box.top||plate.top>=box.bottom;
+                    });
+                }''')
+                assert label_clear
                 rect=pill.locator(':scope > rect')
                 assert float(rect.get_attribute('x'))+float(rect.get_attribute('width'))/2==POSITIONS['s049'][0]
                 assert float(rect.get_attribute('y'))+float(rect.get_attribute('height'))/2==POSITIONS['s049'][1]
@@ -86,10 +99,22 @@ def main():
                 with server.store.lock:
                     room['phase']='decision'
                     game.open_decision(room,[p])
+                # Before any Renko/Sumireko contact every seat is public, so the board marks p.
+                # The centre slot stays free for echo lines; only the list row and ring change.
+                row=screen.locator('.anonymous-arrivals > div.is-waiting')
+                expect(row).to_have_count(1)
+                expect(row).to_contain_text(f"{p['seat']}号 · 旅人甲")
+                expect(row).to_contain_text('选路中')
+                expect(screen.locator('#board-waiting')).to_have_count(0)
+                expect(screen.locator('.waiting-ring')).to_have_count(1)
+                expect(host.locator('#host-start-status')).to_contain_text(f"待确认：{p['seat']}号 · 旅人甲")
+                screen.screenshot(path=str(out/'waiting-row.png'))
                 host.locator('[data-action=pause]').click()
                 expect(host.locator('[data-action=pause]')).to_have_text('恢复自动继续')
                 phones[0].locator('[data-action=wait]').click()
                 expect(phones[0].locator('.submitted-ticket')).to_contain_text('主持人已暂停')
+                expect(screen.locator('.anonymous-arrivals > div.is-waiting')).to_have_count(0)
+                expect(screen.locator('.waiting-ring')).to_have_count(0)
                 host.wait_for_timeout(3300)
                 assert room['phase']=='decision'
                 host.screenshot(path=str(out/'host-paused.png'))

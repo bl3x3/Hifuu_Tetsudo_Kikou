@@ -26,7 +26,6 @@ def main():
         p=room['players'][0]
         p.update(station='s023',lastArrival=dict(station='s023',tick=0),role='renko')
         p['hand']=[game.line_offer(EDGE_LINE['e016'],'s023','fixture')]
-        room['decision']['remaining']=300000
         server.store.rooms['FIXES']=room
         errors=[];geometry=[]
         try:
@@ -76,40 +75,51 @@ def main():
                 host=browser.new_page(viewport=dict(width=1920,height=1080))
                 host.on('pageerror',lambda e:errors.append(str(e)))
                 host.add_init_script('localStorage.setItem("hifuu-host:FIXES",'+json.dumps(room['hostToken'])+')')
+                host.on('dialog',lambda dialog:dialog.accept())
                 host.goto(base+'/host?room=FIXES')
-                host.locator('[data-action=launch]').wait_for()
+                # The first leg never times out: the host decides to leave unconfirmed players waiting.
+                host.locator('[data-action=launch]:disabled').wait_for()
+                assert host.locator('[data-clock=decision]').count()==0
+                assert '首程不限时' in host.locator('#host-start-status').inner_text()
                 with server.store.lock:
-                    room['decision']['remaining']=0
-                host.wait_for_function('()=>document.querySelector("#host-start-status").textContent.includes("超时留站 3 人")')
-                host.screenshot(path=str(out/'initial-timeout.png'))
+                    for player in room['players']:player['seen']=now_ms()
+                host.locator('[data-action=launch-force]:enabled').click()
+                host.locator('[data-action=launch]').wait_for(state='detached')
+                assert room['phase']=='running' and room['decision'] is None
+                assert [player['waitUntil'] for player in room['players']]==[2,2,2]
+                forced=[e for e in room['events'] if e['type']=='choice_submitted' and e['source']=='host']
+                assert len(forced)==3,forced
+                host.screenshot(path=str(out/'initial-forced-wait.png'))
                 with server.store.lock:
                     game.end(room,'hifuu','两人的约定，在此刻重合。','s060')
-                host.locator('.ending-typeset').wait_for()
+                # Every outcome has a supplied CG, shown whole in a 16:9 frame.
+                host.locator('.ending[data-outcome=hifuu] img.ending-cg').wait_for()
+                frame=host.locator('.ending-art').bounding_box()
+                assert abs(frame['width']/frame['height']-16/9)<.02,frame
+                assert host.locator('.ending-cg').evaluate('(e)=>getComputedStyle(e).objectFit')=='contain'
                 host.screenshot(path=str(out/'ending-hifuu.png'))
-                # Existing CG remains full 16:9; absent CG gets the typeset fallback.
                 with server.store.lock:room['result'].update(outcome='yukari',reason='下一站，在境界的另一侧。');room['revision']+=1
                 host.locator('[data-outcome=yukari_direct]').wait_for()
                 host.screenshot(path=str(out/'ending-yukari.png'))
                 assert host.request.get(base+'/favicon.ico').status==200
-                # Kick/rejoin through the real host and player APIs.
+                # Kick/rejoin through the real host and player APIs; seats stay put.
                 host.locator('[data-action=rematch]').click();host.locator('.seat-list').wait_for()
-                host.on('dialog',lambda dialog:dialog.accept())
                 host.locator('[data-action=kick]').nth(1).click()
                 host.wait_for_function('()=>document.querySelectorAll("[data-action=kick]").length===2')
-                assert host.locator('.seat-list .seat-number').all_text_contents()==['1','2','3']
+                assert host.locator('.seat-list .seat-number').all_text_contents()==[str(n) for n in range(1,7)]
+                assert host.locator('.seat-name').all_text_contents()[:3]==['A','等待旅人','C']
                 joined=host.request.post(base+'/api/join',data=dict(room='FIXES',name='D')).json()
                 host.wait_for_function('()=>document.querySelectorAll("[data-action=kick]").length===3')
                 assert joined['id']==4
-                assert host.locator('.seat-list .seat-number').all_text_contents()==['1','2','3']
-                assert host.locator('.seat-name').all_text_contents()==['A','D','C']
+                assert host.locator('.seat-name').all_text_contents()[:3]==['A','D','C']
                 # An actual error toast is cleared after expiry, including accessible text.
                 page=browser.new_page();page.goto(base+'/join')
                 page.locator('[name=room]').fill('ZZZZZ');page.locator('[name=name]').fill('test')
                 page.locator('[type=submit]').click();page.locator('#toast.show').wait_for()
                 page.wait_for_function('()=>document.querySelector("#toast").textContent===""',timeout=6000)
                 assert not errors,errors
-                report=dict(status='passed',phone_geometry=geometry,stale_action_refreshed=True,timeout_labels=True,
-                    stable_seats=True,ending_fallback=True,favicon=True,toast_cleared=True,
+                report=dict(status='passed',phone_geometry=geometry,stale_action_refreshed=True,forced_first_leg_waits=True,
+                    stable_seats=True,ending_cg_16x9=True,favicon=True,toast_cleared=True,
                     limits='Chromium mobile emulation; venue Wi-Fi, physical phones and projection still require on-site checks.')
                 (out/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
                 print(json.dumps(report));browser.close()
